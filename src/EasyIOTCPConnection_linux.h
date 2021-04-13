@@ -136,7 +136,6 @@ namespace EasyIO
             TaskPtr m_taskReceive;
 
             bool m_disconnecting;
-            bool m_inSending;
 
             void* m_userdata;
 

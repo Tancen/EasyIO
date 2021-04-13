@@ -8,10 +8,18 @@ namespace EasyIO
 {
     class AutoBuffer
     {
+        struct Data
+        {
+            std::shared_ptr<char> data;
+            size_t size = 0;
+            size_t capacity = 0;
+        };
+
     public:
         AutoBuffer();
         AutoBuffer(size_t capacity);
         AutoBuffer(const char *data, size_t size);
+        ~AutoBuffer();
 
         void reset();
         void reset(size_t capacity);
@@ -28,9 +36,7 @@ namespace EasyIO
         static void free(char *p);
 
     private:
-        std::shared_ptr<char> m_sptrData;
-        size_t m_size;
-        size_t m_capacity;
+        std::shared_ptr<Data> m_data;
     };
 }
 

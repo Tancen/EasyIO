@@ -5,8 +5,7 @@
 using namespace EasyIO;
 
 AutoBuffer::AutoBuffer()
-    : m_size(0),
-      m_capacity(0)
+    : m_data(new Data())
 {
 
 }
@@ -23,75 +22,78 @@ AutoBuffer::AutoBuffer(const char *data, size_t size)
     reset(data, size);
 }
 
+AutoBuffer::~AutoBuffer()
+{
+
+}
+
 void AutoBuffer::reset()
 {
-	m_sptrData.reset();
-	m_size = 0;
-    m_capacity = 0;
+    m_data->data.reset();
+    m_data->size = 0;
+    m_data->capacity = 0;
 }
 
 void AutoBuffer::reset(size_t capacity)
 {
     if (capacity == 0)
     {
-        m_sptrData.reset();
-        m_capacity = 0;
+        m_data->data.reset();
+        m_data->capacity = 0;
     }
     else
     {
-        m_sptrData.reset(new char[capacity], free);
-        m_capacity = capacity;
+        m_data->data.reset(new char[capacity], free);
+        m_data->capacity = capacity;
     }
 
-    m_size = 0;
+    m_data->size = 0;
 }
 
 void AutoBuffer::reset(const char *data, size_t size)
 {
-    if (size == 0)
-        return;
+    reset(size);
         
-    m_sptrData.reset(new char[size], free);
-	memcpy(m_sptrData.get(), data, size);
-    m_capacity = m_size = size;
+    memcpy(m_data->data.get(), data, size);
+    m_data->size = size;
 }
 
 bool AutoBuffer::fill(size_t offset, const char *data, size_t size)
 {
-    if (offset + size > m_capacity)
+    if (offset + size > m_data->capacity)
         return false;
 
-    memcpy(m_sptrData.get() + offset, data, size);
+    memcpy(m_data->data.get() + offset, data, size);
     return true;
 }
 
 void AutoBuffer::resize(size_t size)
 {
-    if (size <= m_capacity)
-        m_size = size;
+    if (size <= m_data->capacity)
+        m_data->size = size;
     else
     {
-        auto oldData = m_sptrData;
-        auto oldSize = m_size;
+        auto oldData = m_data->data;
+        auto oldSize = m_data->size;
         reset(size);
-        memcpy(m_sptrData.get(), oldData.get(), oldSize);
-        m_size = size;
+        memcpy(m_data->data.get(), oldData.get(), oldSize);
+        m_data->size = size;
     }
 }
 
 char* AutoBuffer::data()
 {
-	return m_sptrData.get();
+    return m_data->data.get();
 }
 
 size_t AutoBuffer::size() const
 {
-    return m_size;
+    return m_data->size;
 }
 
 size_t AutoBuffer::capacity() const
 {
-    return m_capacity;
+    return m_data->capacity;
 }
 
 void AutoBuffer::free(char *p)

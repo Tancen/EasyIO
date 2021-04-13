@@ -26,8 +26,7 @@ Connection::Connection(EventLoop *worker, SOCKET sock, bool connected)
       m_localPort(0),
       m_peerPort(0),
       m_userdata(NULL),
-      m_disconnecting(false),
-      m_inSending(0)
+      m_disconnecting(false)
 {
     m_context.events = EPOLLIN;
     int err = 0;
@@ -96,15 +95,6 @@ bool Connection::send(AutoBuffer buffer, bool completely)
     {
         do
         {
-            m_lock.lock();
-            if (m_inSending)    //防止重复递归发送
-            {
-                m_lock.unlock();
-                break;
-            }
-            m_inSending = true;
-            m_lock.unlock();
-
             int err;
             if (!_send(err))
             {
@@ -115,7 +105,6 @@ bool Connection::send(AutoBuffer buffer, bool completely)
                 }
                 else if (err < 0)
                 {
-                    setLastSystemError(errno);
                     if (errno == EAGAIN)
                     {
                         m_lock.lock();
@@ -129,17 +118,21 @@ bool Connection::send(AutoBuffer buffer, bool completely)
                         m_context.events = EPOLLIN | EPOLLOUT;
                         err = 0;
                         if(!m_worker->modify(m_handle, &m_context, err))
+                        {
                             setLastSystemError(err);
+                            disconnect();
+                            ret = false;
+                        }
                         m_lock.unlock();
                     }
                     else
                     {
+                        setLastSystemError(errno);
                         disconnect();
                         ret = false;
                     }
                 }
             }
-            m_inSending = false;
 
             dispatchCallbacks();
         }
@@ -358,7 +351,11 @@ void Connection::handleEvents(uint32_t events)
                 m_context.events = EPOLLIN;
                 int err = 0;
                 if(!m_worker->modify(m_handle, &m_context, err))
+                {
                     setLastSystemError(errno);
+                    close();
+                    return;
+                }
             }
         }
     }

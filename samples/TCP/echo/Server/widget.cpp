@@ -2,14 +2,14 @@
 #include "ui_widget.h"
 #include <QMessageBox>
 #include <QTime>
+#include <qdebug.h>
 #include "../../../test_config.h"
 
 using namespace std::placeholders;
 
 Widget::Widget(QWidget *parent) :
     QWidget(parent),
-    ui(new Ui::Widget),
-    m_recvBuf(TEST_DEFAULT_DATA_SIZ_TCP)
+    ui(new Ui::Widget)
 {
     ui->setupUi(this);
     QObject::connect(ui->btnOpen, SIGNAL(clicked(bool)), this, SLOT(open()));
@@ -53,8 +53,9 @@ void Widget::whenConnected(EasyIO::TCP::IConnection *con)
     con->setReceiveBufferSize(128 * 1024);
     con->setLinger(1, 0);
 
-    m_recvBuf.resize();
-    if(!con->recv(m_recvBuf))
+    EasyIO::AutoBuffer buf(TEST_DEFAULT_DATA_SIZ_TCP);
+    buf.resize();
+    if(!con->recv(buf))
         con->disconnect();
 }
 
@@ -103,8 +104,7 @@ void Widget::whenBufferReceived(EasyIO::TCP::IConnection *con, EasyIO::AutoBuffe
         EasyIO::AutoBuffer data2(data.data(), data.size());
         data2.resize();
         data.resize();
-        m_recvBuf.resize();
-        if(!con->send(data2) || !con->recv(m_recvBuf))
+        if(!con->send(data2) || !con->recv(data))
             con->disconnect();
 
     }
