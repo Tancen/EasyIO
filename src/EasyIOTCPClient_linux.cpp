@@ -129,6 +129,7 @@ bool Client::connect(const std::string& host, unsigned short port)
         });
 
         int err = 0;
+        m_connecting = true;
         EventLoop* w = (EasyIO::EventLoop*)(m_worker.get());
         if (!w->add(m_handle, &m_context, err))
         {

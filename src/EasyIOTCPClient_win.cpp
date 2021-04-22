@@ -133,6 +133,7 @@ bool Client::connect(const std::string& host, unsigned short port)
             addr.sin_port = htons(port);
 
             increasePostCount();
+            m_connecting = true;
             if(!((LPFN_CONNECTEX)m_connectEx)(m_handle, (sockaddr*)&addr, sizeof(addr), NULL, 0, NULL, context))
             {
                 int err = GetLastError();
@@ -140,7 +141,6 @@ bool Client::connect(const std::string& host, unsigned short port)
                 {
                     setLastSystemError(err);
                     decreasePostCount();
-                    m_connecting = false;
                     break;
                 }
             }
