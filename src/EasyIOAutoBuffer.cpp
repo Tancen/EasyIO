@@ -101,6 +101,20 @@ void AutoBuffer::append(const char *data, size_t len)
     }
 }
 
+void AutoBuffer::extend(size_t capacity)
+{
+    if (capacity < m_data->capacity)
+    {
+        resize(capacity);
+    }
+    else
+    {
+        size_t old = m_data->size;
+        resize(capacity);
+        m_data->size = old;
+    }
+}
+
 char* AutoBuffer::data()
 {
     return m_data->data.get();

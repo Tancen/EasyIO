@@ -28,6 +28,7 @@ namespace EasyIO
         bool fill(size_t offset, const char *data, size_t size);
         void resize(size_t size = 0);
         void append(const char* data, size_t len);
+        void extend(size_t capacity);
 
         char* data();
         size_t size() const;
