@@ -20,18 +20,11 @@ EasyIO::UDP::IClientPtr EasyIO::UDP::Client::create()
 
 EasyIO::UDP::IClientPtr EasyIO::UDP::Client::create(EasyIO::IEventLoopPtr worker)
 {
-#if  defined(WIN32) || defined(WIN64)
-    WSADATA wsaData;
-
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != NO_ERROR)
-    {
-        return IClientPtr();
-    }
-#endif
-
     IClientPtr ret;
     if (!dynamic_cast<EventLoop*>(worker.get()))
+    {
         return ret;
+    }
 
     ret.reset(new Client(worker));
     return ret;
@@ -39,5 +32,4 @@ EasyIO::UDP::IClientPtr EasyIO::UDP::Client::create(EasyIO::IEventLoopPtr worker
 
 EasyIO::UDP::Client::~Client()
 {
-
 }

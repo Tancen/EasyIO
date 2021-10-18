@@ -15,13 +15,6 @@ Server::Server(EventLoopGroupPtr workers)
 
 IServerPtr Server::create()
 {
-    WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != NO_ERROR)
-    {
-        return IServerPtr();
-    }
-
-
     IEventLoopPtr w = EventLoop::create();
     if (!w.get())
         return IServerPtr();
@@ -38,7 +31,9 @@ IServerPtr Server::create(EasyIO::EventLoopGroupPtr workers)
     for (const auto & it :ws)
     {
         if (!dynamic_cast<EventLoop*>(it.get()))
+        {
             return IServerPtr();
+        }
     }
 
     return IServerPtr(new Server(workers));
@@ -47,7 +42,6 @@ IServerPtr Server::create(EasyIO::EventLoopGroupPtr workers)
 Server::~Server()
 {
     close();
-    WSACleanup();
 }
 
 bool Server::open(unsigned short port, unsigned int backlog)

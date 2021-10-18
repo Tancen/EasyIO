@@ -27,13 +27,6 @@ IClientPtr Client::create()
 
 IClientPtr Client::create(IEventLoopPtr worker)
 {
-    WSADATA wsaData;
-
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != NO_ERROR)
-    {
-        return IClientPtr();
-    }
-
     IClientPtr ret;
     if (!dynamic_cast<EventLoop*>(worker.get()))
         return ret;
@@ -47,7 +40,6 @@ Client::~Client()
     disconnect();
     while(m_connected || m_countPost || m_detained || m_connecting)
         std::this_thread::sleep_for(std::chrono::microseconds(1));
-    WSACleanup();
 }
 
 bool Client::connect(const std::string& host, unsigned short port)

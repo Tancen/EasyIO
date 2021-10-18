@@ -20,15 +20,6 @@ EasyIO::UDP::IServerPtr EasyIO::UDP::Server::create()
 
 EasyIO::UDP::IServerPtr EasyIO::UDP::Server::create(EasyIO::IEventLoopPtr worker)
 {
-#if  defined(WIN32) || defined(WIN64)
-    WSADATA wsaData;
-
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != NO_ERROR)
-    {
-        return IServerPtr();
-    }
-#endif
-
     IServerPtr ret;
     if (!dynamic_cast<EventLoop*>(worker.get()))
         return ret;
@@ -40,9 +31,6 @@ EasyIO::UDP::IServerPtr EasyIO::UDP::Server::create(EasyIO::IEventLoopPtr worker
 EasyIO::UDP::Server::~Server()
 {
     close();
-#if  defined(WIN32) || defined(WIN64)
-    WSACleanup();
-#endif
 }
 
 bool EasyIO::UDP::Server::send(const std::string &ip, unsigned short port, EasyIO::AutoBuffer buffer)
