@@ -29,8 +29,8 @@ namespace EasyIO
             bool connected();
 
             bool disconnect();
-            bool send(AutoBuffer buffer, bool completely);
-            bool recv(AutoBuffer buffer, bool completely);
+            bool send(AutoBuffer buffer, bool completely, int *numPending);
+            bool recv(AutoBuffer buffer, bool completely, int *numPending);
 
             bool enableKeepalive(unsigned long interval = 1000, unsigned long time = 2000);
             bool disableKeepalive();

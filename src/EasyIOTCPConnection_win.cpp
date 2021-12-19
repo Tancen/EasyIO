@@ -83,24 +83,35 @@ bool Connection::disconnect()
     return true;
 }
 
-bool Connection::send(AutoBuffer buffer,  bool completely)
+bool Connection::send(AutoBuffer buffer,  bool completely, int *numPending)
 {
     if (!buffer.capacity() || buffer.capacity() == buffer.size())
         return false;
 
-    return post(buffer, true, completely,
+
+    bool ret = post(buffer, true, completely,
         std::bind(&Connection::whenSendDone, this, _1, _2),
         std::bind(&Connection::whenError, this, _1, _2));
+
+    if (ret && numPending)
+        *numPending = m_countPost;
+
+    return ret;
 }
 
-bool Connection::recv(AutoBuffer buffer,  bool completely)
+bool Connection::recv(AutoBuffer buffer,  bool completely, int *numPending)
 {
     if (!buffer.capacity() || buffer.capacity() == buffer.size())
         return false;
 
-    return post(buffer, false, completely,
+    bool ret = post(buffer, false, completely,
         std::bind(&Connection::whenRecvDone, this, _1, _2),
         std::bind(&Connection::whenError, this, _1, _2));
+
+    if (ret && numPending)
+        *numPending = m_countPost;
+
+    return ret;
 }
 
 bool Connection::enableKeepalive(unsigned long nInterval, unsigned long nTime)

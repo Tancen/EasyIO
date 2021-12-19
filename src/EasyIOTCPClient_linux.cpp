@@ -77,25 +77,26 @@ bool Client::connect(const std::string& host, unsigned short port)
         if(::connect(m_handle, (sockaddr*)&addr, sizeof(addr)) != 0 && errno != EINPROGRESS)
             break;
 
-        m_context.events = EPOLLOUT | EPOLLET;
+        m_context.events = EPOLLOUT | EPOLLONESHOT;
         m_context.setCallback([this](uint32_t events)
         {
             do
             {
+                int err = 0;
+                EventLoop* w = (EasyIO::EventLoop*)(m_worker.get());
+                m_context.events = EPOLLRDHUP;
+                if(!w->modify(m_handle, &m_context, err))
+                {
+                    setLastSystemError(err);
+                    break;
+                }
+
                 if ((events & EPOLLOUT) && !(events & EPOLLERR))
                 {
-                    m_context.events = EPOLLIN;
-                    EventLoop* w = (EasyIO::EventLoop*)(m_worker.get());
-                    int err = 0;
-                    if(!w->modify(m_handle, &m_context, err))
-                    {
-                        setLastSystemError(err);
-
-                        break;
-                    }
                     m_connected = true;
                     m_connecting = false;
                     updateEndPoint();
+
                     if (onConnected)
                         onConnected(this);
 

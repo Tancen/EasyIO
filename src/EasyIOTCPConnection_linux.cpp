@@ -26,12 +26,15 @@ Connection::Connection(EventLoop *worker, SOCKET sock, bool connected)
       m_localPort(0),
       m_peerPort(0),
       m_userdata(NULL),
-      m_disconnecting(false)
+      m_disconnecting(false),
+      m_numPending(0)
 {
-    m_context.events = EPOLLIN;
-    int err = 0;
-    if(!m_worker->add(m_handle, &m_context, err))
-        setLastSystemError(err);
+    if (m_handle != INVALID_SOCKET)
+    {
+        int err = 0;
+        if(!m_worker->add(m_handle, &m_context, err))
+            setLastSystemError(err);
+    }
 }
 
 Connection::~Connection()
@@ -71,7 +74,7 @@ bool Connection::disconnect()
     return true;
 }
 
-bool Connection::send(AutoBuffer buffer, bool completely)
+bool Connection::send(AutoBuffer buffer, bool completely, int *numPending)
 {
     if (!buffer.capacity() || buffer.capacity() == buffer.size())
         return false;
@@ -89,6 +92,7 @@ bool Connection::send(AutoBuffer buffer, bool completely)
 
         isEmpty = m_tasksSend.empty();
         m_tasksSend.push_back(TaskPtr(new Task(buffer, completely)));
+        m_numPending++;
     }
 
     if (isEmpty)
@@ -115,7 +119,7 @@ bool Connection::send(AutoBuffer buffer, bool completely)
                             break;
                         }
 
-                        m_context.events = EPOLLIN | EPOLLOUT;
+                        m_context.events |= EPOLLOUT;
                         err = 0;
                         if(!m_worker->modify(m_handle, &m_context, err))
                         {
@@ -140,10 +144,13 @@ bool Connection::send(AutoBuffer buffer, bool completely)
     }
 
 
+    if (ret && numPending)
+        *numPending = m_numPending;
+
     return ret;
 }
 
-bool Connection::recv(AutoBuffer buffer, bool completely)
+bool Connection::recv(AutoBuffer buffer, bool completely, int *numPending)
 {
     if (!buffer.capacity() || buffer.capacity() == buffer.size())
         return false;
@@ -157,8 +164,24 @@ bool Connection::recv(AutoBuffer buffer, bool completely)
         if (!m_connected || m_taskReceive.get())
             return false;
 
+        m_numPending++;
         m_taskReceive.reset(new Task(buffer, completely));
+
+        if (!(m_context.events & EPOLLIN))
+        {
+            m_context.events |= EPOLLIN;
+            int err = 0;
+            if(!m_worker->modify(m_handle, &m_context, err))
+            {
+                setLastSystemError(err);
+                disconnect();
+                return false;
+            }
+        }
     }
+
+    if (numPending)
+        *numPending = m_numPending;
 
     return true;
 }
@@ -326,7 +349,7 @@ void Connection::handleEvents(uint32_t events)
             {
                 m_callbackList.push_back(new BufferReceiveCallback(this, m_taskReceive->data()));
                 m_taskReceive.reset();
-
+                m_numPending--;
             }
         }
     }
@@ -343,24 +366,32 @@ void Connection::handleEvents(uint32_t events)
                 return;
             }
         }
+    }
 
+    dispatchCallbacks();
+
+    {
+        std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
+        uint32_t events = m_context.events;
+        if (m_tasksSend.empty())
+            events &= ~EPOLLOUT;
+
+        if (!m_taskReceive.get())
+            events &= ~EPOLLIN;
+
+        if (m_context.events != events)
         {
-            std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
-            if (m_tasksSend.empty())
+            m_context.events = events;
+            int err = 0;
+            if(!m_worker->modify(m_handle, &m_context, err))
             {
-                m_context.events = EPOLLIN;
-                int err = 0;
-                if(!m_worker->modify(m_handle, &m_context, err))
-                {
-                    setLastSystemError(errno);
-                    close();
-                    return;
-                }
+                setLastSystemError(errno);
+                close();
+                return;
             }
         }
     }
 
-    dispatchCallbacks();
 }
 
 void Connection::close()
@@ -377,6 +408,7 @@ void Connection::close()
         m_disconnecting = false;
         m_tasksSend.clear();
         m_taskReceive.reset();
+        m_numPending = 0;
         m_callbackList.push_back(new DisconnectedCallback(this));
     }
 
@@ -410,6 +442,7 @@ bool Connection::_send(int& err)
         if (!task->completely() || task->finished())
         {
             m_tasksSend.pop_front();
+            m_numPending--;
             m_callbackList.push_back(new BufferSentCallback(this, task->data()));
         }
 

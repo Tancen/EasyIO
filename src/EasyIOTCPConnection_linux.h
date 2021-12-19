@@ -11,6 +11,7 @@
 #include "EasyIOTCPIConnection.h"
 #include <list>
 #include <mutex>
+#include <atomic>
 
 namespace EasyIO
 {
@@ -89,8 +90,8 @@ namespace EasyIO
             bool connected();
 
             bool disconnect();
-            bool send(AutoBuffer buffer, bool completely);
-            bool recv(AutoBuffer buffer, bool completely);
+            bool send(AutoBuffer buffer, bool completely, int *numPending);
+            bool recv(AutoBuffer buffer, bool completely, int *numPending);
 
             bool enableKeepalive(unsigned long interval = 1000, unsigned long time = 2000);
             bool disableKeepalive();
@@ -140,6 +141,8 @@ namespace EasyIO
             void* m_userdata;
 
             std::list<ICallback*> m_callbackList;
+
+            std::atomic<int> m_numPending;
         };
     }
 }

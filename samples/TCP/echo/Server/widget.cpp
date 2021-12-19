@@ -106,7 +106,6 @@ void Widget::whenBufferReceived(EasyIO::TCP::IConnection *con, EasyIO::AutoBuffe
         data.resize();
         if(!con->send(data2) || !con->recv(data))
             con->disconnect();
-
     }
 
     emit textNeedPrint(ui->txtedtMsg, str);

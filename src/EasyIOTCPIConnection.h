@@ -25,8 +25,8 @@ namespace EasyIO
             virtual bool connected() = 0;
 
             virtual bool disconnect() = 0;
-            virtual bool send(AutoBuffer buffer, bool completely = true) = 0;
-            virtual bool recv(AutoBuffer buffer, bool completely = true) = 0;
+            virtual bool send(AutoBuffer buffer, bool completely = true, int *numPending = nullptr) = 0;
+            virtual bool recv(AutoBuffer buffer, bool completely = true, int *numPending = nullptr) = 0;
 
             virtual bool enableKeepalive(unsigned long interval = 1000, unsigned long time = 2000) = 0;
             virtual bool disableKeepalive() = 0;

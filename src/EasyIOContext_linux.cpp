@@ -6,7 +6,7 @@ using namespace EasyIO::Context;
 Context::Context(std::function<void (uint32_t)> callback)
     : m_callback(callback)
 {
-    this->events = EPOLLIN;
+    this->events = EPOLLRDHUP;
     this->data.ptr = this;
 }
 
