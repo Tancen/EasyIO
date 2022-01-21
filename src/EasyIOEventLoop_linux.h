@@ -26,9 +26,9 @@ namespace EasyIO
 
         IEventLoopPtr share();
 
-        bool add(int fd, Context::Context *context, int& err);
-        bool modify(int fd, Context::Context *context, int& err);
-        bool remove(int fd, Context::Context *context, int& err);
+        void add(int fd, Context::Context *context);
+        void modify(int fd, Context::Context *context);
+        void remove(int fd, Context::Context *context);
 
     private:
         EventLoop();

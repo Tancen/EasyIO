@@ -31,9 +31,7 @@ Connection::Connection(EventLoop *worker, SOCKET sock, bool connected)
 {
     if (m_handle != INVALID_SOCKET)
     {
-        int err = 0;
-        if(!m_worker->add(m_handle, &m_context, err))
-            setLastSystemError(err);
+        m_worker->add(m_handle, &m_context);
     }
 }
 
@@ -120,13 +118,7 @@ bool Connection::send(AutoBuffer buffer, bool completely, int *numPending)
                         }
 
                         m_context.events |= EPOLLOUT;
-                        err = 0;
-                        if(!m_worker->modify(m_handle, &m_context, err))
-                        {
-                            setLastSystemError(err);
-                            disconnect();
-                            ret = false;
-                        }
+                        m_worker->modify(m_handle, &m_context);
                         m_lock.unlock();
                     }
                     else
@@ -170,13 +162,7 @@ bool Connection::recv(AutoBuffer buffer, bool completely, int *numPending)
         if (!(m_context.events & EPOLLIN))
         {
             m_context.events |= EPOLLIN;
-            int err = 0;
-            if(!m_worker->modify(m_handle, &m_context, err))
-            {
-                setLastSystemError(err);
-                disconnect();
-                return false;
-            }
+            m_worker->modify(m_handle, &m_context);
         }
     }
 
@@ -306,6 +292,7 @@ void Connection::handleEvents(uint32_t events)
 {
     int ret;
     size_t offset, size;
+    IConnectionPtr self;
 
     if (!m_connected)
         return;
@@ -324,6 +311,7 @@ void Connection::handleEvents(uint32_t events)
         {
             setLastSystemError(err);
         }
+        self = this->shared_from_this();
         close();
         return;
     }
@@ -340,6 +328,7 @@ void Connection::handleEvents(uint32_t events)
             if (ret <= 0)
             {
                 setLastSystemError(errno);
+                self = this->shared_from_this();
                 close();
                 return;
             }
@@ -362,6 +351,7 @@ void Connection::handleEvents(uint32_t events)
             if (err == 0 || (err < 0 && errno != EAGAIN))
             {
                 setLastSystemError(errno);
+                self = this->shared_from_this();
                 close();
                 return;
             }
@@ -372,22 +362,19 @@ void Connection::handleEvents(uint32_t events)
 
     {
         std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
-        uint32_t events = m_context.events;
-        if (m_tasksSend.empty())
-            events &= ~EPOLLOUT;
-
-        if (!m_taskReceive.get())
-            events &= ~EPOLLIN;
-
-        if (m_context.events != events)
+        if (m_connected)
         {
-            m_context.events = events;
-            int err = 0;
-            if(!m_worker->modify(m_handle, &m_context, err))
+            uint32_t events = m_context.events;
+            if (m_tasksSend.empty())
+                events &= ~EPOLLOUT;
+
+            if (!m_taskReceive.get())
+                events &= ~EPOLLIN;
+
+            if (m_context.events != events)
             {
-                setLastSystemError(errno);
-                close();
-                return;
+                m_context.events = events;
+                m_worker->modify(m_handle, &m_context);
             }
         }
     }
@@ -399,9 +386,7 @@ void Connection::close()
     {
         std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
 
-        int err = 0;
-        if(!m_worker->remove(m_handle, &m_context, err))
-            setLastSystemError(errno);
+        m_worker->remove(m_handle, &m_context);
         closesocket(m_handle);
         m_handle = INVALID_SOCKET;
         m_connected = false;

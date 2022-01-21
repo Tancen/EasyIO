@@ -82,14 +82,9 @@ bool Client::connect(const std::string& host, unsigned short port)
         {
             do
             {
-                int err = 0;
                 EventLoop* w = (EasyIO::EventLoop*)(m_worker.get());
-                m_context.events = EPOLLRDHUP;
-                if(!w->modify(m_handle, &m_context, err))
-                {
-                    setLastSystemError(err);
-                    break;
-                }
+                m_context.events = 0;
+                w->modify(m_handle, &m_context);
 
                 if ((events & EPOLLOUT) && !(events & EPOLLERR))
                 {
@@ -116,9 +111,8 @@ bool Client::connect(const std::string& host, unsigned short port)
                 return;
             } while (0);
 
-            int err = 0;
             EventLoop* w = (EasyIO::EventLoop*)(m_worker.get());
-            w->remove(m_handle, &m_context, err);
+            w->remove(m_handle, &m_context);
             closesocket(m_handle);
             ++m_detained;
             m_connecting = false;
@@ -129,14 +123,9 @@ bool Client::connect(const std::string& host, unsigned short port)
 
         });
 
-        int err = 0;
         m_connecting = true;
         EventLoop* w = (EasyIO::EventLoop*)(m_worker.get());
-        if (!w->add(m_handle, &m_context, err))
-        {
-            setLastSystemError(err);
-            break;
-        }
+        w->add(m_handle, &m_context);
         return true;
     }
     while(0);

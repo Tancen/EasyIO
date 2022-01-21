@@ -18,9 +18,7 @@ EasyIO::UDP::Socket::Socket(EasyIO::EventLoop *worker, SOCKET sock)
         m_inSending(false)
 {
     m_context.events = 0;
-    int err = 0;
-    if (!m_worker->add(m_handle, &m_context, err))
-        setLastSystemError(err);
+    m_worker->add(m_handle, &m_context);
 }
 
 EasyIO::UDP::Socket::~Socket()
@@ -90,12 +88,7 @@ bool EasyIO::UDP::Socket::recv(EasyIO::AutoBuffer buffer)
         if (!(m_context.events & EPOLLIN))
         {
             m_context.events |= EPOLLIN;
-            int err = 0;
-            if(!m_worker->modify(m_handle, &m_context, err))
-            {
-                setLastSystemError(err);
-                return false;
-            }
+            m_worker->modify(m_handle, &m_context);
         }
     }
 
@@ -105,8 +98,7 @@ bool EasyIO::UDP::Socket::recv(EasyIO::AutoBuffer buffer)
 void EasyIO::UDP::Socket::close()
 {
     std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
-    int err = 0;
-    m_worker->remove(m_handle, &m_context, err);
+    m_worker->remove(m_handle, &m_context);
     closesocket(m_handle);
     m_handle = INVALID_SOCKET;
     m_taskReceive.reset();
@@ -153,12 +145,7 @@ void EasyIO::UDP::Socket::handleEvents(uint32_t events)
             if (!m_taskReceive.get())
             {
                 m_context.events = 0;
-                int err = 0;
-                if(!m_worker->modify(m_handle, &m_context, err))
-                {
-                    setLastSystemError(err);
-                    return;
-                }
+                m_worker->modify(m_handle, &m_context);
             }
         }
     }

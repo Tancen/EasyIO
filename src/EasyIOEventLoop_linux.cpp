@@ -6,6 +6,7 @@
 #include <bits/types.h>
 #include <pthread.h>
 #include <string.h>
+#include <assert.h>
 
 using namespace EasyIO;
 
@@ -60,31 +61,22 @@ IEventLoopPtr EventLoop::create(int maxEvents)
     return ret;
 }
 
-bool EventLoop::add(int fd, Context::Context *context, int& err)
+void EventLoop::add(int fd, Context::Context *context)
 {
     int ret = epoll_ctl(m_handle, EPOLL_CTL_ADD, fd, context);
-    if (ret)
-        err = errno;
-
-    return !ret;
+    assert(!ret);
 }
 
-bool EventLoop::modify(int fd, Context::Context *context, int& err)
+void EventLoop::modify(int fd, Context::Context *context)
 {
     int ret = epoll_ctl(m_handle, EPOLL_CTL_MOD, fd, context);
-    if (ret)
-        err = errno;
-
-    return !ret;
+    assert(!ret);
 }
 
-bool EventLoop::remove(int fd, Context::Context *context, int& err)
+void EventLoop::remove(int fd, Context::Context *context)
 {
     int ret = epoll_ctl(m_handle, EPOLL_CTL_DEL, fd, context);
-    if (ret)
-        err = errno;
-
-    return !ret;
+    assert(!ret);
 }
 
 void EventLoop::execute(int maxEvents)
