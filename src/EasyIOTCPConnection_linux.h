@@ -117,6 +117,7 @@ namespace EasyIO
             virtual void close();
             bool _send(int& err);
 
+            void pushCallback(ICallback *callback);
             void dispatchCallbacks();
 
         protected:
@@ -141,6 +142,7 @@ namespace EasyIO
             void* m_userdata;
 
             std::list<ICallback*> m_callbackList;
+            size_t m_countCallback;
 
             std::atomic<int> m_numPending;
         };

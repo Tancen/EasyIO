@@ -27,7 +27,8 @@ Connection::Connection(EventLoop *worker, SOCKET sock, bool connected)
       m_peerPort(0),
       m_userdata(NULL),
       m_disconnecting(false),
-      m_numPending(0)
+      m_numPending(0),
+      m_countCallback(0)
 {
     if (m_handle != INVALID_SOCKET)
     {
@@ -38,8 +39,11 @@ Connection::Connection(EventLoop *worker, SOCKET sock, bool connected)
 Connection::~Connection()
 {
     disconnect();
-    while (m_connected || m_disconnecting)
-        std::this_thread::sleep_for(std::chrono::microseconds(1));
+    {
+        std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
+        while (m_connected || m_disconnecting || m_countCallback)
+            std::this_thread::sleep_for(std::chrono::microseconds(1));
+    }
 }
 
 IConnectionPtr Connection::share()
@@ -292,93 +296,87 @@ void Connection::handleEvents(uint32_t events)
 {
     int ret;
     size_t offset, size;
-    IConnectionPtr self;
 
-    if (!m_connected)
-        return;
-
+    assert( m_connected);
+    bool bad = false;
+    do
     {
-        std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
-        if (!m_connected)
-            return;
-    }
-
-    if (events & EPOLLERR)
-    {
-        int err = 0;
-        socklen_t l = sizeof(err);
-        if(getsockopt(m_handle, SOL_SOCKET, SO_ERROR, &err, &l) == 0)
+        if (events & EPOLLIN)
         {
-            setLastSystemError(err);
+            std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
+            if (m_taskReceive.get())
+            {
+                offset = m_taskReceive->progress();
+                size = m_taskReceive->data().capacity() - offset;
+                ret = ::recv(m_handle,
+                    m_taskReceive->data().data() + offset, size, 0);
+                if (ret <= 0)
+                {
+                    setLastSystemError(errno);
+                    bad = true;
+                    break;
+                }
+                m_taskReceive->increase(ret);
+
+                if (!m_taskReceive->completely() || m_taskReceive->finished())
+                {
+                    pushCallback(new BufferReceiveCallback(this, m_taskReceive->data()));
+                    m_taskReceive.reset();
+                    m_numPending--;
+                }
+            }
         }
-        self = this->shared_from_this();
+
+        if (events & EPOLLERR)
+        {
+            int err = 0;
+            socklen_t l = sizeof(err);
+            if(getsockopt(m_handle, SOL_SOCKET, SO_ERROR, &err, &l) == 0)
+            {
+                setLastSystemError(err);
+            }
+            bad = true;
+            break;
+        }
+
+        if (events & EPOLLOUT)
+        {
+            int err;
+            if (!_send(err))
+            {
+                if (err == 0 || (err < 0 && errno != EAGAIN))
+                {
+                    setLastSystemError(errno);
+                    bad = true;
+                    break;
+                }
+            }
+        }
+
+        dispatchCallbacks();
+
+        {
+            std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
+            if (m_connected)
+            {
+                uint32_t events = m_context.events;
+                if (m_tasksSend.empty())
+                    events &= ~EPOLLOUT;
+
+                if (!m_taskReceive.get())
+                    events &= ~EPOLLIN;
+
+                if (m_context.events != events)
+                {
+                    m_context.events = events;
+                    m_worker->modify(m_handle, &m_context);
+                }
+            }
+        }
+    } while (0);
+
+    if (bad)
         close();
-        return;
-    }
-
-    if (events & EPOLLIN)
-    {
-        std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
-        if (m_taskReceive.get())
-        {
-            offset = m_taskReceive->progress();
-            size = m_taskReceive->data().capacity() - offset;
-            ret = ::recv(m_handle,
-                m_taskReceive->data().data() + offset, size, 0);
-            if (ret <= 0)
-            {
-                setLastSystemError(errno);
-                self = this->shared_from_this();
-                close();
-                return;
-            }
-            m_taskReceive->increase(ret);
-
-            if (!m_taskReceive->completely() || m_taskReceive->finished())
-            {
-                m_callbackList.push_back(new BufferReceiveCallback(this, m_taskReceive->data()));
-                m_taskReceive.reset();
-                m_numPending--;
-            }
-        }
-    }
-
-    if (events & EPOLLOUT)
-    {
-        int err;
-        if (!_send(err))
-        {
-            if (err == 0 || (err < 0 && errno != EAGAIN))
-            {
-                setLastSystemError(errno);
-                self = this->shared_from_this();
-                close();
-                return;
-            }
-        }
-    }
-
-    dispatchCallbacks();
-
-    {
-        std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
-        if (m_connected)
-        {
-            uint32_t events = m_context.events;
-            if (m_tasksSend.empty())
-                events &= ~EPOLLOUT;
-
-            if (!m_taskReceive.get())
-                events &= ~EPOLLIN;
-
-            if (m_context.events != events)
-            {
-                m_context.events = events;
-                m_worker->modify(m_handle, &m_context);
-            }
-        }
-    }
-
 }
 
 void Connection::close()
@@ -394,7 +392,7 @@ void Connection::close()
         m_tasksSend.clear();
         m_taskReceive.reset();
         m_numPending = 0;
-        m_callbackList.push_back(new DisconnectedCallback(this));
+        pushCallback(new DisconnectedCallback(this));
     }
 
     dispatchCallbacks();
@@ -428,13 +426,20 @@ bool Connection::_send(int& err)
         {
             m_tasksSend.pop_front();
             m_numPending--;
-            m_callbackList.push_back(new BufferSentCallback(this, task->data()));
+            pushCallback(new BufferSentCallback(this, task->data()));
         }
 
 
     } while (1);
 
     return ret;
+}
+
+void Connection::pushCallback(ICallback *callback)
+{
+    std::lock_guard<std::recursive_mutex> guard(m_lock);
+    m_callbackList.push_back(callback);
+    m_countCallback++;
 }
 
 void Connection::dispatchCallbacks()
@@ -452,6 +457,7 @@ void Connection::dispatchCallbacks()
 
         if (!cb)
             break;
+        m_countCallback--;
 
         cb->callback();
         delete cb;
