@@ -5,7 +5,7 @@
 #include <string>
 #include <functional>
 #include "EasyIODef.h"
-#include "EasyIOAutoBuffer.h"
+#include "EasyIOByteBuffer.h"
 #include "EasyIOContext_linux.h"
 #include "EasyIOEventLoop_linux.h"
 #include "EasyIOTCPIConnection.h"
@@ -17,68 +17,8 @@ namespace EasyIO
 {
     namespace TCP
     {
-        class Connection;
-        class ICallback
-        {
-        public:
-            virtual ~ICallback();
-            virtual void callback() = 0;
-        };
-
-        class DisconnectedCallback : public ICallback
-        {
-        public:
-            DisconnectedCallback(Connection* con);
-            void callback();
-
-        private:
-            Connection* m_con;
-        };
-
-        class BufferSentCallback : public ICallback
-        {
-        public:
-            BufferSentCallback(Connection* con, AutoBuffer data);
-            void callback();
-
-        private:
-            Connection* m_con;
-            AutoBuffer m_data;
-        };
-
-        class BufferReceiveCallback : public ICallback
-        {
-        public:
-            BufferReceiveCallback(Connection* con, AutoBuffer data);
-            void callback();
-
-        private:
-            Connection* m_con;
-            AutoBuffer m_data;
-        };
-
         class Connection : virtual public IConnection
         {
-            class Task
-            {
-            public:
-                Task(AutoBuffer data, bool completely);
-                ~Task();
-
-                AutoBuffer data();
-                void increase(size_t progress);
-                size_t progress();
-                bool finished();
-                bool completely();
-
-            private:
-                AutoBuffer m_data;
-                size_t m_progress;
-                bool m_completely;
-            };
-
-            typedef std::shared_ptr<Task> TaskPtr;
-
         public:
             Connection(EventLoop *worker);
             Connection(EventLoop *worker, SOCKET sock, bool connected = true);
@@ -89,9 +29,10 @@ namespace EasyIO
 
             bool connected();
 
-            bool disconnect();
-            bool send(AutoBuffer buffer, bool completely, int *numPending);
-            bool recv(AutoBuffer buffer, bool completely, int *numPending);
+            void disconnect();
+            void send(ByteBuffer buffer);
+            void recv(ByteBuffer buffer);
+            size_t numBytesPending();
 
             bool enableKeepalive(unsigned long interval = 1000, unsigned long time = 2000);
             bool disableKeepalive();
@@ -113,18 +54,30 @@ namespace EasyIO
             void* userdata() const ;
 
         protected:
-            void handleEvents(uint32_t events);
-            virtual void close();
-            bool _send(int& err);
+            int send0();
+            int recv0();
+            void disconnect(const std::string& reason);
+            void disconnect0(bool requireUnlock);
 
-            void pushCallback(ICallback *callback);
-            void dispatchCallbacks();
+            bool sendComplete(ByteBuffer buffer);
+            bool recvComplete(ByteBuffer buffer);
+
+            bool addTask(ByteBuffer buffer, std::list<ByteBuffer>& dst);
+            int doFirstTask(std::list<ByteBuffer>& tasks, std::function<int(ByteBuffer)> transmitter,
+                             std::function<bool(ByteBuffer)> isComplete,
+                             std::function<void (IConnection*, ByteBuffer)> onComplete);
+            void popFirstTask(std::list<ByteBuffer>& tasks);
+            void cleanTasks(std::list<ByteBuffer>& tasks);
+
+            void handleEvents(uint32_t events);
 
         protected:
             SOCKET m_handle;
             EventLoop* m_worker;
             Context::Context m_context;
+
             bool m_connected;
+            bool m_disconnecting;
 
             std::string m_localIP;
             unsigned short m_localPort;
@@ -134,17 +87,13 @@ namespace EasyIO
 
             std::recursive_mutex m_lock;
 
-            std::list<TaskPtr> m_tasksSend;
-            TaskPtr m_taskReceive;
-
-            bool m_disconnecting;
+            std::list<ByteBuffer> m_tasksSend;
+            std::list<ByteBuffer> m_tasksRecv;
 
             void* m_userdata;
 
-            std::list<ICallback*> m_callbackList;
-            size_t m_countCallback;
-
-            std::atomic<int> m_numPending;
+            std::atomic<size_t> m_numBytesPending;
+            std::string m_reason;
         };
     }
 }

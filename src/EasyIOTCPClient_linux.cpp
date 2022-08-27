@@ -2,11 +2,13 @@
 #include <arpa/inet.h>
 #include "EasyIOTCPClient_linux.h"
 #include "EasyIOEventLoop_linux.h"
+#include "EasyIOError.h"
 #include <functional>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <string.h>
 
 using namespace EasyIO::TCP;
 using namespace std::placeholders;
@@ -15,16 +17,10 @@ Client::Client(IEventLoopPtr worker)
     : Connection(static_cast<EventLoop*>(worker.get())),
       m_worker(worker),
       m_connecting(false),
+      m_canceling(false),
       m_detained(0)
 {
 
-}
-
-void Client::close()
-{
-    ++m_detained;
-    Connection::close();
-    --m_detained;
 }
 
 IClientPtr Client::create()
@@ -46,17 +42,22 @@ IClientPtr Client::create(IEventLoopPtr worker)
 Client::~Client()
 {
     disconnect();
-    while (m_connected || m_detained || m_connecting)
+    do
+    {
+        {
+            std::lock_guard  g(m_lock);
+            if (!m_connected && !m_detained && !m_connecting)
+                break;
+        }
         std::this_thread::sleep_for(std::chrono::microseconds(1));
+    } while (true);
 }
 
-bool Client::connect(const std::string& host, unsigned short port)
+void Client::connect(const std::string& host, unsigned short port)
 {
-    std::lock_guard<std::recursive_mutex> guard(m_lock);
+    std::lock_guard  g(m_lock);
     if (m_connected || m_connecting)
-        return false;
-
-    setLastSystemError(0);
+        return;
 
     do
     {
@@ -80,61 +81,89 @@ bool Client::connect(const std::string& host, unsigned short port)
         m_context.events = EPOLLOUT | EPOLLONESHOT;
         m_context.setCallback([this](uint32_t events)
         {
+            int err = 0;
             do
             {
-                EventLoop* w = (EasyIO::EventLoop*)(m_worker.get());
-                m_context.events = 0;
-                w->modify(m_handle, &m_context);
-
-                if ((events & EPOLLOUT) && !(events & EPOLLERR))
+                socklen_t l = sizeof(err);
+                if (getsockopt(m_handle, SOL_SOCKET, SO_ERROR, &err, &l))
                 {
+                    err = errno;
+                    break;
+                }
+                if (err)
+                    break;
+
+                if (!(events & EPOLLOUT))
+                    break;
+
+                auto onConnected = this->onConnected;
+                {
+                    std::lock_guard g(m_lock);
+                    if (m_canceling)
+                        break;
+
+                    EventLoop* w = (EasyIO::EventLoop*)(m_worker.get());
+                    m_context.events = 0;
+                    w->modify(m_handle, &m_context);
+
                     m_connected = true;
                     m_connecting = false;
                     updateEndPoint();
 
-                    if (onConnected)
-                        onConnected(this);
-
                     m_context.setCallback(std::bind(&Client::handleEvents, this, _1));
                 }
-                else
-                {
-                    int err = 0;
-                    socklen_t l = sizeof(err);
-                    if(getsockopt(m_handle, SOL_SOCKET, SO_ERROR, &err, &l) == 0)
-                    {
-                        setLastSystemError(err);
-                    }
-                    break;
-                }
+
+                if (onConnected)
+                    onConnected(this);
 
                 return;
-            } while (0);
+            } while (false);
 
-            EventLoop* w = (EasyIO::EventLoop*)(m_worker.get());
-            w->remove(m_handle, &m_context);
-            closesocket(m_handle);
-            ++m_detained;
-            m_connecting = false;
-            m_handle = INVALID_SOCKET;
+            std::string reason = Error::formatError(err);
+            {
+                std::lock_guard g(m_lock);
+                EventLoop* w = (EasyIO::EventLoop*)(m_worker.get());
+                w->remove(m_handle, &m_context);
+                closesocket(m_handle);
+                ++m_detained;
+                m_connecting = false;
+                m_handle = INVALID_SOCKET;
+                if (m_canceling)
+                    reason = Error::STR_FORCED_CLOSURE;
+                m_canceling = false;
+            }
+
             if (onConnectFailed)
-                onConnectFailed(this);
+                onConnectFailed(this, reason);
             --m_detained;
-
         });
 
         m_connecting = true;
         EventLoop* w = (EasyIO::EventLoop*)(m_worker.get());
         w->add(m_handle, &m_context);
-        return true;
+        return;
     }
     while(0);
 
     closesocket(m_handle);
     m_handle = INVALID_SOCKET;
+    ++m_detained;
     m_connecting = false;
+    if (onConnectFailed)
+        this->onConnectFailed(this, Error::formatError(errno));
+    --m_detained;
+}
 
-    return false;
+void Client::disconnect()
+{
+    std::lock_guard g(m_lock);
+    if (m_connected)
+        Connection::disconnect();
+    else
+    {
+        m_canceling = true;
+        shutdown(m_handle, SHUT_RDWR);
+    }
 }
 
 #endif

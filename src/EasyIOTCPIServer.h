@@ -22,19 +22,10 @@ namespace EasyIO
             virtual void close() = 0;
             virtual bool opened() = 0;
 
-            int lastSystemError(){ return m_lastSystemError; }
-
-        protected:
-            void setLastSystemError(int err) { m_lastSystemError = err; }
-
         public:
             std::function<void (IConnection*)> onConnected;
-            std::function<void (IConnection*)> onDisconnected;
-            std::function<void (IConnection*, AutoBuffer data)> onBufferSent;
-            std::function<void (IConnection*, AutoBuffer data)> onBufferReceived;
-
-        protected:
-            int m_lastSystemError = 0;
+            std::function<void (IConnection*, const std::string& reason)> onDisconnected;
+            std::function<void (IConnection*, ByteBuffer data)> onBufferReceived;
         };
     }
 }

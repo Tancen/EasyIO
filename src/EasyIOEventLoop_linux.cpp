@@ -70,6 +70,8 @@ void EventLoop::add(int fd, Context::Context *context)
 void EventLoop::modify(int fd, Context::Context *context)
 {
     int ret = epoll_ctl(m_handle, EPOLL_CTL_MOD, fd, context);
+    int err = errno;
+    std::string str = strerror(err);
     assert(!ret);
 }
 

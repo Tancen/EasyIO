@@ -5,7 +5,7 @@
 #include <Winsock2.h>
 #include <memory>
 #include <functional>
-#include "EasyIOAutoBuffer.h"
+#include "EasyIOByteBuffer.h"
 #include <atomic>
 
 namespace EasyIO
@@ -13,20 +13,21 @@ namespace EasyIO
     class Context : public OVERLAPPED
     {
     public:
-        Context(bool completely);
-        Context(AutoBuffer buffer, bool completely);
+        enum Flag{ INBOUND, OUTBOUND};
+
+    public:
+        Context(Flag flag);
+        Context(ByteBuffer buffer, Flag flag);
 
         void increase();
         void decrease();
 
         void increaseProgress(size_t increase);
         void error(int err);
-        size_t progress();
 
-        AutoBuffer buffer();
+        ByteBuffer buffer();
         WSABUF* WSABuf();
         bool finished();
-        bool completely();
 
     public:
         std::function<void(Context*, size_t increase)> onDone;
@@ -36,10 +37,9 @@ namespace EasyIO
         ~Context();
 
     private:
-        AutoBuffer m_buffer;
+        Flag m_flag;
+        ByteBuffer m_buffer;
         std::atomic<int> m_ref;
-        size_t m_progress;
-        bool m_completely;
         WSABUF m_wsaBuffer;
     };
 }

@@ -19,8 +19,8 @@ namespace EasyIO
 
             ~Client();
 
-            bool connect(const std::string& host, unsigned short port);
-            bool disconnect();
+            void connect(const std::string& host, unsigned short port) override;
+            void disconnect() override;
 
         private:
             Client(IEventLoopPtr worker);

@@ -26,8 +26,7 @@ Widget::Widget(QWidget *parent) :
     }
 
     m_server->onConnected = std::bind(&Widget::whenConnected, this, _1);
-    m_server->onDisconnected = std::bind(&Widget::whenDisconnected, this, _1);
-    m_server->onBufferSent = std::bind(&Widget::whenBufferSent, this, _1, _2);
+    m_server->onDisconnected = std::bind(&Widget::whenDisconnected, this, _1, _2);
     m_server->onBufferReceived = std::bind(&Widget::whenBufferReceived, this, _1, _2);
 }
 
@@ -40,7 +39,6 @@ Widget::~Widget()
 void Widget::whenConnected(EasyIO::TCP::IConnection *con)
 {
     QString str;
-    con->share();
     str.append(con->peerIP().c_str())
         .append(":")
         .append(QString::number(con->peerPort()))
@@ -53,60 +51,31 @@ void Widget::whenConnected(EasyIO::TCP::IConnection *con)
     con->setReceiveBufferSize(128 * 1024);
     con->setLinger(1, 0);
 
-    EasyIO::AutoBuffer buf(TEST_DEFAULT_DATA_SIZ_TCP);
-    buf.resize();
-    if(!con->recv(buf))
-        con->disconnect();
+    con->recv(EasyIO::ByteBuffer());
 }
 
-void Widget::whenDisconnected(EasyIO::TCP::IConnection *con)
+void Widget::whenDisconnected(EasyIO::TCP::IConnection *con, const std::string& reason)
 {
     QString str;
 
     str.append(con->peerIP().c_str())
         .append(":")
         .append(QString::number(con->peerPort()))
-        .append(" 已断开");
+        .append(" 已断开: ").append(reason.c_str());
 
     emit textNeedPrint(ui->txtedtMsg, str);
 }
 
-void Widget::whenBufferSent(EasyIO::TCP::IConnection *con, EasyIO::AutoBuffer data)
+void Widget::whenBufferReceived(EasyIO::TCP::IConnection *con, EasyIO::ByteBuffer data)
 {
     QString str;
     str.append(con->peerIP().c_str())
         .append(":")
         .append(QString::number(con->peerPort()))
-        .append(" 已发送：")
-        .append(data.data())
-        .append("");
+        .append(" 接收:\n").append(QByteArray(data.data(), data.readableBytes()));
 
-    emit textNeedPrint(ui->txtedtMsg, str);
-}
-
-void Widget::whenBufferReceived(EasyIO::TCP::IConnection *con, EasyIO::AutoBuffer data)
-{
-    QString str;
-    str.append(con->peerIP().c_str())
-        .append(":")
-        .append(QString::number(con->peerPort()))
-        .append(":");
-
-    if (data.size() != TEST_DEFAULT_DATA_SIZ_TCP)
-    {
-        str.append("接收到异常数据, 期望接收到 " +  QString::number(TEST_DEFAULT_DATA_SIZ_TCP)
-                   + " 字节，实际字节 " + QString::number(data.size()));
-    }
-    else
-    {
-        str.append(data.data());
-
-        EasyIO::AutoBuffer data2(data.data(), data.size());
-        data2.resize();
-        data.resize();
-        if(!con->send(data2) || !con->recv(data))
-            con->disconnect();
-    }
+    con->send(data);
+    con->recv(EasyIO::ByteBuffer());
 
     emit textNeedPrint(ui->txtedtMsg, str);
 }

@@ -8,8 +8,7 @@ using namespace std::placeholders;
 
 Widget::Widget(QWidget *parent) :
     QWidget(parent),
-    ui(new Ui::Widget),
-    m_recvBuf(TEST_DEFAULT_DATA_SIZ_UDP)
+    ui(new Ui::Widget)
 {
     ui->setupUi(this);
 
@@ -36,20 +35,15 @@ Widget::~Widget()
     delete ui;
 }
 
-void Widget::whenBufferReceived(EasyIO::UDP::ISocket*, const std::string& ip, unsigned short port, EasyIO::AutoBuffer data)
+void Widget::whenBufferReceived(EasyIO::UDP::ISocket* socket, const std::string& ip, unsigned short port, EasyIO::ByteBuffer data)
 {
     std::string str;
     str.append("已接收 [")
         .append(ip).append(":").append(QString::number(port).toStdString()).append("] :");
 
-    str.append(data.data(), data.size());
+    str.append(data.data(), data.readableBytes());
 
-    data.resize();
-    if(!m_client->recv(data))
-    {
-        str.append("\nrecv失败");
-        m_client->close();
-    }
+    socket->recv(EasyIO::ByteBuffer());
 
     emit textNeedPrint(ui->txtedtMsg, str.c_str());
 }
@@ -62,19 +56,15 @@ void Widget::open()
     }
     else
     {
-        ui->txtedtMsg->append("打开成功");
-        m_recvBuf.resize();
-        if(!m_client->recv(m_recvBuf))
-        {
-            ui->txtedtMsg->append("投递接收请求失败");
-        }
+        ui->txtedtMsg->append("已打开 " + QString::number(m_client->localPort()));
+        m_client->recv(EasyIO::ByteBuffer());
     }
 }
 
 void Widget::close()
 {
     m_client->close();
-    ui->txtedtMsg->append("已关闭");
+    emit textNeedPrint(ui->txtedtMsg, "已关闭");
 }
 
 void Widget::send()
@@ -105,36 +95,22 @@ void Widget::send()
     }
 
 
-    std::string str = ui->txtedtInput->toPlainText().toStdString();
-
-    if (str.empty())
+    std::string text = ui->txtedtInput->toPlainText().toStdString();
+    if (text.empty())
     {
         return;
     }
 
-    EasyIO::AutoBuffer buf(str.c_str(), str.length() + 1);
-    if (!buf.data())
-    {
-        QMessageBox::critical(NULL, "提示", "内存不足");
-        return;
-    }
-    buf.resize();
+    EasyIO::ByteBuffer buf(text.c_str(), text.length() + 1);
+    m_client->send(host, port, buf);
 
-    if (!m_client->send(host, port, buf))
-    {
-        ui->txtedtMsg->append("发送失败");
-    }
-    else
-    {
-        QString str;
-        str.append(" 已发送 [")
-            .append(host.c_str()).append(":").append(QString::number(port)).append("] :")
-            .append(buf.data())
-            .append("");
+    QString str;
+    str.append(" 已发送 [")
+        .append(host.c_str()).append(":").append(QString::number(port)).append("] :")
+        .append(text.c_str())
+        .append("");
 
-        emit textNeedPrint(ui->txtedtMsg, str);
-        ui->txtedtInput->clear();
-    }
+    emit textNeedPrint(ui->txtedtMsg, str);
 }
 
 void Widget::printText(QTextEdit *control, QString str)

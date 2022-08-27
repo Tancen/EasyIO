@@ -23,10 +23,9 @@ signals:
 
 private:
     void whenConnected(EasyIO::TCP::IConnection*);
-    void whenConnectFailed(EasyIO::TCP::IConnection*);
-    void whenDisconnected(EasyIO::TCP::IConnection*);
-    void whenBufferSent(EasyIO::TCP::IConnection*, EasyIO::AutoBuffer data);
-    void whenBufferReceived(EasyIO::TCP::IConnection*, EasyIO::AutoBuffer data);
+    void whenConnectFailed(EasyIO::TCP::IConnection*, const std::string& reason);
+    void whenDisconnected(EasyIO::TCP::IConnection*, const std::string& reason);
+    void whenBufferReceived(EasyIO::TCP::IConnection*, EasyIO::ByteBuffer data);
 
 private slots:
     void connect();
@@ -37,7 +36,6 @@ private slots:
 private:
     Ui::Widget *ui;
     EasyIO::TCP::IClientPtr m_client;
-    EasyIO::AutoBuffer m_bufSend, m_bufRecv;
     Count m_count;
 };
 

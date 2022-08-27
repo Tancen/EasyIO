@@ -1,7 +1,7 @@
 #ifndef EASYIOTCPICONNECTION_H
 #define EASYIOTCPICONNECTION_H
 
-#include "EasyIOAutoBuffer.h"
+#include "EasyIOByteBuffer.h"
 #include "EasyIODef.h"
 #include <functional>
 #include <memory>
@@ -24,9 +24,10 @@ namespace EasyIO
 
             virtual bool connected() = 0;
 
-            virtual bool disconnect() = 0;
-            virtual bool send(AutoBuffer buffer, bool completely = true, int *numPending = nullptr) = 0;
-            virtual bool recv(AutoBuffer buffer, bool completely = true, int *numPending = nullptr) = 0;
+            virtual void disconnect() = 0;
+            virtual void send(ByteBuffer buffer) = 0;
+            virtual void recv(ByteBuffer buffer) = 0;
+            virtual size_t numBytesPending() = 0;
 
             virtual bool enableKeepalive(unsigned long interval = 1000, unsigned long time = 2000) = 0;
             virtual bool disableKeepalive() = 0;
@@ -47,18 +48,9 @@ namespace EasyIO
             virtual void bindUserdata(void* userdata) = 0;
             virtual void* userdata() const = 0;
 
-            int lastSystemError(){ return m_lastSystemError; }
-
-        protected:
-            void setLastSystemError(int err) { m_lastSystemError = err; }
-
         public:
-            std::function<void (IConnection*)> onDisconnected;
-            std::function<void (IConnection*, AutoBuffer data)> onBufferSent;
-            std::function<void (IConnection*, AutoBuffer data)> onBufferReceived;
-
-        protected:
-            int m_lastSystemError = 0;
+            std::function<void (IConnection*, const std::string& reason)> onDisconnected;
+            std::function<void (IConnection*, ByteBuffer data)> onBufferReceived;
         };
     }
 }

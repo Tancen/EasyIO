@@ -28,7 +28,7 @@ namespace EasyIO
             Server(EventLoopGroupPtr workers);
 
             void addConnection(SOCKET sock);
-            void removeConnection(IConnection* con);
+            void removeConnection(IConnection* con, const std::string& reason);
 
 
         private:

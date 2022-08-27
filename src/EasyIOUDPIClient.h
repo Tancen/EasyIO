@@ -1,7 +1,7 @@
 #ifndef EASYIOUDPICLIENT_H
 #define EASYIOUDPICLIENT_H
 
-#include "EasyIOAutoBuffer.h"
+#include "EasyIOByteBuffer.h"
 #include "EasyIOUDPISocket.h"
 #include "EasyIOUDPIServer.h"
 #include <functional>

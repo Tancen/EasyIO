@@ -12,13 +12,12 @@ namespace EasyIO
 {
     namespace UDP
     {
-        class Socket : public ISocket
+        class Socket : virtual public ISocket
         {
-        protected:
-            class ReceivetionContext : public ::EasyIO::Context
+            class Context1 : public ::EasyIO::Context
             {
             public:
-                ReceivetionContext(AutoBuffer buffer);
+                Context1(ByteBuffer buffer, Flag flag);
 
                 sockaddr_in* addr();
                 int* addrLen();
@@ -29,31 +28,67 @@ namespace EasyIO
             };
 
         public:
+            Socket();
             Socket(SOCKET sock);
             ~Socket();
 
             ISocketPtr share();
+
             SOCKET handle();
-            bool send(const std::string& ip, unsigned short port, AutoBuffer buffer);
-            bool recv(AutoBuffer buffer);
+
+            bool opened();
+
             void close();
+            void send(const std::string& ip, unsigned short port, ByteBuffer buffer);
+            void recv(ByteBuffer buffer);
+            size_t numBytesPending();
+
+            const std::string& localIP() const ;
+            unsigned short localPort() const ;
+
+            bool updateEndPoint();
+
+            void bindUserdata(void* userdata);
+            void* userdata() const ;
 
         protected:
-            bool _recv(ReceivetionContext *context);
-            void whenRecvDone(::EasyIO::Context *context, size_t increase);
-            void whenError(::EasyIO::Context *context, int err);
+            int send0();
+            int recv0();
+            void close0(bool requireDecrease);
+
+            bool addTask(Context1 *ctx, std::list<Context1*>& dst);
+            int doFirstTask(std::list<Context1*>& tasks, std::function<int(Context1*)> transmitter);
+            void popFirstTask(std::list<Context1*>& tasks);
+            void cleanTasks(std::list<Context1*>& tasks);
+
+            void whenSendDone(Context *ctx, size_t increase);
+            void whenRecvDone(Context *ctx, size_t increase);
+            void whenError(Context *ctx, int err);
 
             int increasePostCount();
             int decreasePostCount();
 
-
         protected:
             SOCKET m_handle;
-            std::atomic<int> m_countPost;
+
+            bool m_opened;
+            bool m_closing;
+            std::atomic<size_t> m_numBytesPending;
+
+            std::string m_localIP;
+            unsigned short m_localPort;
+
             std::recursive_mutex m_lock;
+            void* m_userdata;
+
+            std::atomic<int> m_countPost;
+            std::list<Context1*> m_tasksSend;
+            std::list<Context1*> m_tasksRecv;
         };
     }
+
 }
+
 
 #endif
 #endif

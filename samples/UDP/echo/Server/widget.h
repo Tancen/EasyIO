@@ -21,7 +21,7 @@ signals:
     void textNeedPrint(QTextEdit* control, QString str);
 
 private:
-    void whenBufferReceived(EasyIO::UDP::ISocket*, const std::string& ip, unsigned short port, EasyIO::AutoBuffer data);
+    void whenBufferReceived(EasyIO::UDP::ISocket*, const std::string& ip, unsigned short port, EasyIO::ByteBuffer data);
 
 private slots:
     void open();
@@ -32,7 +32,6 @@ private slots:
 private:
     Ui::Widget *ui;
     EasyIO::UDP::IServerPtr m_server;
-    EasyIO::AutoBuffer m_recvBuf;
 };
 
 #endif // WIDGET_H

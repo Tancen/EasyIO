@@ -83,7 +83,6 @@ void EventLoop::execute()
                 break;
 
             pContext->increaseProgress(numBytes);
-            pContext->decrease();
         }
         else
         {
@@ -92,7 +91,6 @@ void EventLoop::execute()
             if (pContext)
             {
                 pContext->error(err);
-                pContext->decrease();
             }
             else
                 break;

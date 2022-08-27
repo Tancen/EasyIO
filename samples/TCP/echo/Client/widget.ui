@@ -11,7 +11,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>EasyTcp - Client</string>
+   <string>EasyIO - TCP Client</string>
   </property>
   <layout class="QHBoxLayout" name="horizontalLayout_6">
    <item>
@@ -97,7 +97,7 @@
           </sizepolicy>
          </property>
          <property name="text">
-          <string>8086</string>
+          <string>6948</string>
          </property>
         </widget>
        </item>

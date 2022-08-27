@@ -8,8 +8,7 @@ using namespace std::placeholders;
 
 Widget::Widget(QWidget *parent) :
     QWidget(parent),
-    ui(new Ui::Widget),
-    m_recvBuf(TEST_DEFAULT_DATA_SIZ_TCP)
+    ui(new Ui::Widget)
 {
     ui->setupUi(this);
 
@@ -28,9 +27,8 @@ Widget::Widget(QWidget *parent) :
     }
 
     m_client->onConnected = std::bind(&Widget::whenConnected, this, _1);
-    m_client->onConnectFailed = std::bind(&Widget::whenConnectFailed, this, _1);
-    m_client->onDisconnected = std::bind(&Widget::whenDisconnected, this, _1);
-    m_client->onBufferSent = std::bind(&Widget::whenBufferSent, this, _1, _2);
+    m_client->onConnectFailed = std::bind(&Widget::whenConnectFailed, this, _1, _2);
+    m_client->onDisconnected = std::bind(&Widget::whenDisconnected, this, _1, _2);
     m_client->onBufferReceived = std::bind(&Widget::whenBufferReceived, this, _1, _2);
 }
 
@@ -48,52 +46,26 @@ void Widget::whenConnected(EasyIO::TCP::IConnection *)
     m_client->setReceiveBufferSize(128 * 1024);
     m_client->setLinger(1, 0);
 
-    m_recvBuf.resize();
-    if(!m_client->recv(m_recvBuf))
-        m_client->disconnect();
+    m_client->recv(EasyIO::ByteBuffer());
 }
 
-void Widget::whenConnectFailed(EasyIO::TCP::IConnection *con)
+void Widget::whenConnectFailed(EasyIO::TCP::IConnection *con, const std::string& reason)
 {
-    emit textNeedPrint(ui->txtedtMsg, "连接失败，错误 " + QString::number(con->lastSystemError()) + "");
+    emit textNeedPrint(ui->txtedtMsg, QString("连接失败: ") + reason.c_str());
 }
 
-void Widget::whenDisconnected(EasyIO::TCP::IConnection *)
+void Widget::whenDisconnected(EasyIO::TCP::IConnection *, const std::string& reason)
 {
-    emit textNeedPrint(ui->txtedtMsg, "已断开");
+    emit textNeedPrint(ui->txtedtMsg, QString("已断开: ") + reason.c_str());
 }
 
-void Widget::whenBufferSent(EasyIO::TCP::IConnection *, EasyIO::AutoBuffer data)
+void Widget::whenBufferReceived(EasyIO::TCP::IConnection *con, EasyIO::ByteBuffer data)
 {
     QString str;
-    str.append(" 已发送:")
-        .append(data.data())
-        .append("");
+    str.append("已接收:\n").append(QByteArray(data.data(), data.readableBytes()));
 
-    emit textNeedPrint(ui->txtedtMsg, str);
-}
-
-void Widget::whenBufferReceived(EasyIO::TCP::IConnection *, EasyIO::AutoBuffer data)
-{
-    QString str;
-    str.append("已接收:");
-
-    if (data.size() != TEST_DEFAULT_DATA_SIZ_TCP)
-    {
-        str.append("接收到异常数据, 期望接收到 " +  QString::number(TEST_DEFAULT_DATA_SIZ_TCP)
-                   + " 字节，实际字节 " + QString::number(data.size()));
-    }
-    else
-    {
-        str.append(data.data());
-
-        data.resize();
-        if(!m_client->recv(data))
-        {
-            str.append("\nrecv失败");
-            m_client->disconnect();
-        }
-    }
+    data.clear();
+    con->recv(data);
 
     emit textNeedPrint(ui->txtedtMsg, str);
 }
@@ -125,23 +97,17 @@ void Widget::connect()
         return;
     }
 
-    if (!m_client->connect(host.toStdString(), port))
-    {
-        ui->txtedtMsg->append("连接失败");
-    }
+    m_client->connect(host.toStdString(), port);
 }
 
 void Widget::disconnect()
 {
-    if(!m_client->disconnect())
-    {
-        ui->txtedtMsg->append("断开连接失败");
-    }
+    m_client->disconnect();
 }
 
 void Widget::send()
 {
-    EasyIO::AutoBuffer buf;
+    EasyIO::ByteBuffer buf;
     std::string str = ui->txtedtInput->toPlainText().toStdString();
 
     if (str.empty())
@@ -149,30 +115,8 @@ void Widget::send()
         return;
     }
 
-    if (str.length() >= TEST_DEFAULT_DATA_SIZ_TCP)
-    {
-        QMessageBox::critical(NULL, "提示", "文本长度超过 " + QString::number(TEST_DEFAULT_DATA_SIZ_TCP) + " 字符");
-        return;
-    }
-
-    buf.reset(TEST_DEFAULT_DATA_SIZ_TCP);
-    if (!buf.data())
-    {
-        QMessageBox::critical(NULL, "提示", "内存不足");
-        return;
-    }
-
-    memcpy(buf.data(), str.c_str(), str.length() + 1);
-
-    if (!m_client->send(buf))
-    {
-        ui->txtedtMsg->append("发送失败");
-        m_client->disconnect();
-    }
-    else
-    {
-        ui->txtedtInput->clear();
-    }
+    buf.write(str.c_str(), str.length() + 1);
+    m_client->send(buf);
 }
 
 void Widget::printText(QTextEdit *control, QString str)

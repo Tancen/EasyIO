@@ -52,8 +52,6 @@ bool Server::open(unsigned short port, unsigned int backlog)
     if (m_opened)
         return false;
 
-    setLastSystemError(0);
-
     do
     {
         m_acceptor.reset(new Acceptor());
@@ -61,7 +59,6 @@ bool Server::open(unsigned short port, unsigned int backlog)
         int err = 0;
         if(!m_acceptor->accept(port, backlog, err))
         {
-            setLastSystemError(err);
             break;
         }
 
@@ -107,16 +104,18 @@ void Server::addConnection(SOCKET sock)
 {
     int flag = fcntl(sock, F_GETFL, 0);
     if (-1 == flag )
+    {
+        closesocket(sock);
         return;
+    }
     fcntl(sock, F_SETFL, flag | O_NONBLOCK);
 
     EventLoop* w = (EventLoop*)m_workers->getNext();
 
     IConnectionPtr con(new Connection(w, sock, true));
     con->updateEndPoint();
-    con->onBufferSent = onBufferSent;
     con->onBufferReceived = onBufferReceived;
-    con->onDisconnected = std::bind(&Server::removeConnection, this, _1);
+    con->onDisconnected = std::bind(&Server::removeConnection, this, _1, _2);
 
 
     {
@@ -128,10 +127,10 @@ void Server::addConnection(SOCKET sock)
         onConnected(con.get());
 }
 
-void Server::removeConnection(IConnection *con)
+void Server::removeConnection(IConnection *con, const std::string& reason)
 {
     if (onDisconnected)
-        onDisconnected(con);
+        onDisconnected(con, reason);
 
     {
         std::lock_guard<std::recursive_mutex> lockGuard(m_lockConnections);

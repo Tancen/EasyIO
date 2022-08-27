@@ -8,8 +8,7 @@ using namespace std::placeholders;
 
 Widget::Widget(QWidget *parent) :
     QWidget(parent),
-    ui(new Ui::Widget),
-    m_recvBuf(TEST_DEFAULT_DATA_SIZ_UDP)
+    ui(new Ui::Widget)
 {
     ui->setupUi(this);
 
@@ -35,28 +34,16 @@ Widget::~Widget()
     delete ui;
 }
 
-void Widget::whenBufferReceived(EasyIO::UDP::ISocket*, const std::string& ip, unsigned short port, EasyIO::AutoBuffer data)
+void Widget::whenBufferReceived(EasyIO::UDP::ISocket* socket, const std::string& ip, unsigned short port, EasyIO::ByteBuffer data)
 {
     std::string str;
     str.append("已接收 [")
         .append(ip).append(":").append(QString::number(port).toStdString()).append("] :");
 
-    str.append(data.data(), data.size());
+    str.append(data.data(), data.readableBytes());
 
-    EasyIO::AutoBuffer data2(data.data(), data.size());
-    data2.resize();
-    if(!m_server->send(ip, port, data2))
-    {
-        str.append("\necho failed, err ").append(QString::number(m_server->lastSystemError()).toStdString());
-        m_server->close();
-    }
-
-    data.resize();
-    if(!m_server->recv(data))
-    {
-        str.append("\nrecv失败");
-        m_server->close();
-    }
+    socket->send(ip, port, data);
+    socket->recv(EasyIO::ByteBuffer());
 
     emit textNeedPrint(ui->txtedtMsg, str.c_str());
 }
@@ -86,18 +73,14 @@ void Widget::open()
     {
         ui->txtedtMsg->append("打开成功");
 
-        m_recvBuf.resize();
-        if(!m_server->recv(m_recvBuf))
-        {
-            ui->txtedtMsg->append("投递接收请求失败");
-        }
+       m_server->recv(EasyIO::ByteBuffer());
     }
 }
 
 void Widget::close()
 {
     m_server->close();
-    ui->txtedtMsg->append("已关闭");
+    emit textNeedPrint(ui->txtedtMsg, "已关闭");
 }
 
 void Widget::printText(QTextEdit *control, QString str)

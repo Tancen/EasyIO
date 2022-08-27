@@ -1,7 +1,6 @@
 #if  defined(WIN32) || defined(WIN64)
 #include "EasyIOTCPServer_win.h"
 #include "EasyIOEventLoop_win.h"
-#include <time.h>
 
 using namespace EasyIO::TCP;
 using namespace std::placeholders;
@@ -51,8 +50,6 @@ bool Server::open(unsigned short port, unsigned int backlog)
     if (m_opened)
         return false;
 
-    setLastSystemError(0);
-
     do
     {
         m_acceptor.reset(new Acceptor());
@@ -60,7 +57,6 @@ bool Server::open(unsigned short port, unsigned int backlog)
         int err = 0;
         if(!m_acceptor->accept(port, backlog, err))
         {
-            setLastSystemError(err);
             break;
         }
 
@@ -103,11 +99,11 @@ bool Server::opened()
 
 void Server::addConnection(SOCKET sock)
 {
-    IConnectionPtr con(new Connection(sock, true));
+    Connection* con0 = new Connection(sock, true);
+    IConnectionPtr con(con0);
     con->updateEndPoint();
-    con->onBufferSent = onBufferSent;
     con->onBufferReceived = onBufferReceived;
-    con->onDisconnected = std::bind(&Server::removeConnection, this, _1);
+    con->onDisconnected = std::bind(&Server::removeConnection, this, _1, _2);
 
     EventLoop* w = (EventLoop*)m_workers->getNext();
     int err = 0;
@@ -123,15 +119,14 @@ void Server::addConnection(SOCKET sock)
     }
     else
     {
-        setLastSystemError(err);
         closesocket(sock);
     };
 }
 
-void Server::removeConnection(IConnection *con)
+void Server::removeConnection(IConnection *con, const std::string& reason)
 {
     if (onDisconnected)
-        onDisconnected(con);
+        onDisconnected(con, reason);
 
     {
         std::lock_guard<std::recursive_mutex> lockGuard(m_lockConnections);

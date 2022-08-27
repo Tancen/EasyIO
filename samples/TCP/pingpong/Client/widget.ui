@@ -11,7 +11,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>EasyTcp - Client</string>
+   <string>EasyIO - TCP Client</string>
   </property>
   <layout class="QHBoxLayout" name="horizontalLayout_5">
    <item>

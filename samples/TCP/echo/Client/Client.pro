@@ -26,9 +26,10 @@ DEFINES += QT_DEPRECATED_WARNINGS
 INCLUDEPATH += ../../../../src
 
 SOURCES += main.cpp\
-        ../../../../src/EasyIOAutoBuffer.cpp \
+        ../../../../src/EasyIOByteBuffer.cpp \
         ../../../../src/EasyIOContext_linux.cpp \
         ../../../../src/EasyIOContext_win.cpp \
+        ../../../../src/EasyIOError.cpp \
         ../../../../src/EasyIOEventLoopGroup.cpp \
         ../../../../src/EasyIOEventLoop_linux.cpp \
         ../../../../src/EasyIOEventLoop_win.cpp \
@@ -47,10 +48,11 @@ SOURCES += main.cpp\
 
 HEADERS  += widget.h \
     ../../../../src/EasyIO.h \
-    ../../../../src/EasyIOAutoBuffer.h \
+    ../../../../src/EasyIOByteBuffer.h \
     ../../../../src/EasyIOContext_linux.h \
     ../../../../src/EasyIOContext_win.h \
     ../../../../src/EasyIODef.h \
+    ../../../../src/EasyIOError.h \
     ../../../../src/EasyIOEventLoopGroup.h \
     ../../../../src/EasyIOEventLoop_linux.h \
     ../../../../src/EasyIOEventLoop_win.h \

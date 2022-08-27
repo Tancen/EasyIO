@@ -1,5 +1,6 @@
 #if  defined(WIN32) || defined(WIN64)
 #include "EasyIOTCPConnection_win.h"
+#include "EasyIOError.h"
 #include <mstcpip.h>
 #include <mswsock.h>
 #include <WinBase.h>
@@ -17,10 +18,11 @@ Connection::Connection()
 Connection::Connection(SOCKET sock, bool connected)
     : m_handle(sock),
       m_connected(connected),
+      m_disconnecting(false),
+      m_numBytesPending(0),
       m_localPort(0),
       m_peerPort(0),
-      m_userdata(NULL),
-      m_disconnecting(false),
+      m_userdata(nullptr),
       m_countPost(0)
 {
 
@@ -29,8 +31,15 @@ Connection::Connection(SOCKET sock, bool connected)
 Connection::~Connection()
 {
     disconnect();
-    while(m_connected || m_countPost)
+    do
+    {
+        {
+            std::lock_guard  g(m_lock);
+            if (!m_connected && !m_countPost)
+                break;
+        }
         std::this_thread::sleep_for(std::chrono::microseconds(1));
+    } while (true);
 }
 
 IConnectionPtr Connection::share()
@@ -48,70 +57,171 @@ bool Connection::connected()
     return m_connected;
 }
 
-bool Connection::disconnect()
+void Connection::disconnect()
 {
-    if (!m_connected)
-        return false;
+    disconnect0(false, false, Error::STR_FORCED_CLOSURE);
+}
 
+bool Connection::disconnecting()
+{
+    return m_disconnecting;
+}
+
+void Connection::disconnect0(bool requireDecrease, bool requireUnlock, const std::string& reason)
+{
+    IConnectionPtr holder;
+    if (!this->weak_from_this().expired())
+        holder = this->shared_from_this();;
+
+    bool unlocked = false;
     do
     {
-        std::lock_guard<std::recursive_mutex> guard(m_lock);
+        std::lock_guard g(m_lock);
         if (m_disconnecting || !m_connected)
             break;
 
         m_disconnecting = true;
         closesocket(m_handle);
         m_handle = INVALID_SOCKET;
-
     }
     while(0);
 
-    if (!m_countPost)
+    do
     {
         {
-            std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
+            std::lock_guard g(m_lock);
             if (!m_connected)
-                return false;
+                break;
+
+            if (requireDecrease)
+            {
+                if (m_countPost - 1 > 0)
+                    break;
+            }
+            else if (m_countPost)
+                break;
 
             m_connected = false;
-            m_disconnecting = false;
+            m_numBytesPending = 0;
+            cleanTasks(m_tasksSend);
+            cleanTasks(m_tasksRecv);
+        }
+        if (requireUnlock)
+        {
+            m_lock.unlock();
+            unlocked = true;
         }
 
+
         if (onDisconnected)
-            onDisconnected(this);
+            onDisconnected(this, reason);
+
+        {
+            std::lock_guard  g(m_lock);
+            m_disconnecting = false;
+        }
+    } while (0);
+
+
+    if (requireUnlock && !unlocked)
+        m_lock.unlock();
+
+    if (requireDecrease)
+    {
+        decreasePostCount();
     }
-    return true;
+
 }
 
-bool Connection::send(AutoBuffer buffer,  bool completely, int *numPending)
+void Connection::send(ByteBuffer buffer)
 {
-    if (!buffer.capacity() || buffer.capacity() == buffer.size())
-        return false;
+    if (!buffer.readableBytes())
+        return;
 
+    int err = 0;
+    {
+        std::lock_guard g(m_lock);
+        if (!m_connected)
+            return;
 
-    bool ret = post(buffer, true, completely,
-        std::bind(&Connection::whenSendDone, this, _1, _2),
-        std::bind(&Connection::whenError, this, _1, _2));
+        Context* ctx = new Context(buffer, Context::OUTBOUND);
+        ctx->onDone = std::bind(&Connection::whenSendDone, this, _1, _2);
+        ctx->onError = std::bind(&Connection::whenError, this, _1, _2);
 
-    if (ret && numPending)
-        *numPending = m_countPost;
+        m_numBytesPending += buffer.readableBytes();
+        bool isEmpty = addTask(ctx, m_tasksSend);
+        if (isEmpty)
+        {
+            err = send0();
+        }
+        ctx->decrease();
+    }
+    if (err)
+        disconnect0(false, false, Error::formatError(err));
+}
 
+int Connection::send0()
+{
+    int ret = doFirstTask(m_tasksSend, [this](Context* ctx)
+    {
+        DWORD flags = 0;
+        int ret = WSASend(m_handle, ctx->WSABuf(), 1,  NULL, flags, ctx, NULL);
+        if (ret == SOCKET_ERROR)
+        {
+            int err = GetLastError();
+            if(err != WSA_IO_PENDING)
+                return err;
+        }
+        return 0;
+    });
     return ret;
 }
 
-bool Connection::recv(AutoBuffer buffer,  bool completely, int *numPending)
+void Connection::recv(ByteBuffer buffer)
 {
-    if (!buffer.capacity() || buffer.capacity() == buffer.size())
-        return false;
+    buffer.ensureWritable(4096);
 
-    bool ret = post(buffer, false, completely,
-        std::bind(&Connection::whenRecvDone, this, _1, _2),
-        std::bind(&Connection::whenError, this, _1, _2));
+    int err = 0;
+    {
+        std::lock_guard g(m_lock);
+        if (!m_connected)
+            return;
 
-    if (ret && numPending)
-        *numPending = m_countPost;
+        Context* ctx = new Context(buffer, Context::INBOUND);
+        ctx->onDone = std::bind(&Connection::whenRecvDone, this, _1, _2);
+        ctx->onError = std::bind(&Connection::whenError, this, _1, _2);
 
+        bool isEmpty = addTask(ctx, m_tasksRecv);
+        if (isEmpty)
+        {
+            err = recv0();
+        }
+        ctx->decrease();
+    }
+    if (err)
+        disconnect0(false, false, Error::formatError(err));
+}
+
+int Connection::recv0()
+{
+    int ret = doFirstTask(m_tasksRecv, [this](Context* ctx)
+    {
+        DWORD flags = 0;
+        int ret = WSARecv(m_handle, ctx->WSABuf(), 1,  NULL, &flags, ctx, NULL);
+        if (ret == SOCKET_ERROR)
+        {
+            int err = GetLastError();
+            if(err != WSA_IO_PENDING)
+                return err;
+        }
+        return 0;
+    });
     return ret;
+}
+
+size_t Connection::numBytesPending()
+{
+    return m_numBytesPending;
 }
 
 bool Connection::enableKeepalive(unsigned long nInterval, unsigned long nTime)
@@ -129,10 +239,6 @@ bool Connection::enableKeepalive(unsigned long nInterval, unsigned long nTime)
 
     int ret = WSAIoctl(m_handle, SIO_KEEPALIVE_VALS, (LPVOID)&inKeepAlive, sizeof(tcp_keepalive),
             (LPVOID)&outKeepAlive, sizeof(tcp_keepalive), &numBytes, NULL, NULL);
-    if (ret)
-    {
-        setLastSystemError(GetLastError());
-    }
 
     return !ret;
 }
@@ -151,33 +257,18 @@ bool Connection::disableKeepalive()
     int ret = WSAIoctl(m_handle, SIO_KEEPALIVE_VALS, (LPVOID)&inKeepAlive, sizeof(tcp_keepalive),
             (LPVOID)&outKeepAlive, sizeof(tcp_keepalive), &numBytes, NULL, NULL);
 
-    if (ret)
-    {
-        setLastSystemError(GetLastError());
-    }
-
     return !ret;
 }
 
 bool Connection::setSendBufferSize(unsigned long nSize)
 {
     int ret = setsockopt(m_handle, SOL_SOCKET, SO_SNDBUF, (char*)&nSize, sizeof(unsigned long));
-    if (ret)
-    {
-        setLastSystemError(GetLastError());
-    }
-
     return !ret;
 }
 
 bool Connection::setReceiveBufferSize(unsigned long nSize)
 {
     int ret = setsockopt(m_handle, SOL_SOCKET, SO_RCVBUF, (char*)&nSize, sizeof(unsigned long));
-    if (ret)
-    {
-        setLastSystemError(GetLastError());
-    }
-
     return !ret;
 }
 
@@ -185,11 +276,6 @@ bool Connection::setLinger(unsigned short onoff, unsigned short linger)
 {
     struct linger opt = {onoff, linger};
     int ret = setsockopt(m_handle, SOL_SOCKET, SO_LINGER, (char*)&opt, sizeof(opt));
-    if (ret)
-    {
-        setLastSystemError(GetLastError());
-    }
-
     return !ret;
 }
 
@@ -218,24 +304,18 @@ bool Connection::updateEndPoint()
     int len = sizeof(sockaddr_in);
     sockaddr_in addrLocal, addrPeer;
 
-    do
-    {
-        if(getpeername(m_handle, (sockaddr*)&addrPeer, &len) == SOCKET_ERROR)
-            break;
+    if(getpeername(m_handle, (sockaddr*)&addrPeer, &len) == SOCKET_ERROR)
+        return false;
 
-        m_peerIP = inet_ntoa(addrPeer.sin_addr);
-        m_peerPort = ntohs(addrPeer.sin_port);
+    m_peerIP = inet_ntoa(addrPeer.sin_addr);
+    m_peerPort = ntohs(addrPeer.sin_port);
 
-        if(getsockname(m_handle, (sockaddr*)&addrLocal, &len) == SOCKET_ERROR)
-            break;
+    if(getsockname(m_handle, (sockaddr*)&addrLocal, &len) == SOCKET_ERROR)
+        return false;
 
-        m_localIP = inet_ntoa(addrLocal.sin_addr);
-        m_localPort = ntohs(addrLocal.sin_port);
-        return true;
-    } while (0);
-
-    setLastSystemError(GetLastError());
-    return false;
+    m_localIP = inet_ntoa(addrLocal.sin_addr);
+    m_localPort = ntohs(addrLocal.sin_port);
+    return true;
 }
 
 void Connection::bindUserdata(void *userdata)
@@ -248,118 +328,143 @@ void *Connection::userdata() const
     return m_userdata;
 }
 
-bool Connection::post(Context *context, bool isSend)
+bool Connection::addTask(Context *ctx, std::list<Context *> &dst)
 {
-    if (!m_connected || m_disconnecting)
-    {
-        return false;
-    }
-
-    context->increase();
-    do
-    {
-        m_lock.lock();
-        if (!m_connected || m_disconnecting)
-        {
-            m_lock.unlock();
-            break;
-        }
-
-        increasePostCount();
-
-        int ret;
-        DWORD flags = 0;
-        if (isSend)
-            ret = WSASend(m_handle, context->WSABuf(), 1,  NULL, flags, context, NULL);
-        else
-            ret = WSARecv(m_handle, context->WSABuf(), 1,  NULL, &flags, context, NULL);
-        m_lock.unlock();
-
-        if (ret == SOCKET_ERROR)
-        {
-            int err = GetLastError();
-            if(err != WSA_IO_PENDING)
-            {
-                setLastSystemError(err);
-                decreasePostCount();
-                break;
-            }
-        }
-
-        return true;
-    }while(0);
-
-    context->decrease();
-    return false;
-}
-
-bool Connection::post(AutoBuffer buffer, bool isSend, bool completely,
-    std::function<void(Context*, size_t)> doneCallback, std::function<void(Context*, int)> errorCallback)
-{
-    Context *context = new Context(buffer, completely);
-    context->onDone = doneCallback;
-    context->onError = errorCallback;
-
-    bool ret = post(context, isSend);
-    if (!ret)
-        disconnect();
-    context->decrease();
+    bool ret = dst.empty();
+    ctx->increase();
+    dst.push_back(ctx);
     return ret;
 }
 
-void Connection::whenDone(Context *context, size_t increase, bool isSend,
-    std::function<void (Connection *, AutoBuffer)> callback)
+int Connection::doFirstTask(std::list<Context*>& tasks, std::function<int(Context*)> transmitter)
 {
-    if (context->finished() || !context->completely())
-    {
-        if (callback)
-            callback(this, context->buffer());
-    }
+    std::lock_guard g(m_lock);
 
-    bool bad = false;
-    if (increase)
+    if (tasks.empty())
+        return 0;
+
+    increasePostCount();
+    Context* ctx = tasks.front();
+    int ret = transmitter(ctx);
+    if (ret)
+        decreasePostCount();
+    return ret;
+}
+
+void Connection::popFirstTask(std::list<Context*>& tasks)
+{
+    std::lock_guard g(m_lock);
+    if (tasks.empty())
+        return;
+    Context* ctx = tasks.front();
+    tasks.pop_front();
+    ctx->decrease();
+}
+
+void Connection::cleanTasks(std::list<Context *> &tasks)
+{
+    std::lock_guard g(m_lock);
+
+    while (!tasks.empty())
+        popFirstTask(tasks);
+}
+
+void Connection::whenSendDone(Context *ctx, size_t increase)
+{
+    int err = 0;
+    do
     {
-        if (!context->finished() && context->completely())
+        if (!increase)
         {
-            if(!post(context, isSend))
-                bad = true;
+            std::lock_guard g(m_lock);
+            err = Error::getSocketError(m_handle);
+            break;
         }
+
+        if (ctx->finished())
+            popFirstTask(m_tasksSend);
+
+        err = send0();
+    } while (0);
+
+    m_lock.lock();
+    if (m_disconnecting)
+    {
+        disconnect0(true, true, Error::STR_FORCED_CLOSURE);
+    }
+    else if (err)
+    {
+        disconnect0(true, true, Error::formatError(err));
     }
     else
     {
-        bad = true;
+        decreasePostCount();
+        m_lock.unlock();
     }
-
-    decreasePostCount();
-    if (bad || m_disconnecting)
-        disconnect();
 }
+void Connection::whenRecvDone(Context *ctx, size_t increase)
+{
+    int err = 0;
+    do
+    {
+        if (!increase)
+        {
+            std::lock_guard g(m_lock);
+            err = Error::getSocketError(m_handle);
+            break;
+        }
 
-void Connection::whenSendDone(Context *context, size_t increase)
-{
-    whenDone(context, increase, true, onBufferSent);
-}
-void Connection::whenRecvDone(Context *context, size_t increase)
-{
-    whenDone(context, increase, false, onBufferReceived);
+        if (onBufferReceived)
+        {
+            onBufferReceived(this, ctx->buffer());
+        }
+
+        popFirstTask(m_tasksRecv);
+        err = recv0();
+    } while (0);
+
+    m_lock.lock();
+    if (m_disconnecting)
+    {
+        disconnect0(true, true, Error::STR_FORCED_CLOSURE);
+    }
+    else if (err)
+    {
+        disconnect0(true, true, Error::formatError(err));
+    }
+    else
+    {
+        decreasePostCount();
+        m_lock.unlock();
+    }
 }
 
 void Connection::whenError(Context *context, int err)
 {
-    setLastSystemError(err);
-    decreasePostCount();
-    disconnect();
+    std::string reason;
+    {
+        std::lock_guard g(m_lock);
+        if (m_disconnecting)
+            reason = Error::STR_FORCED_CLOSURE;
+        else
+            reason = Error::formatError(err);
+    }
+
+    disconnect0(true, false, reason);
 }
 
 int Connection::increasePostCount()
 {
-    return ++m_countPost;
+    int ret = ++m_countPost;
+    return ret;
 }
 
 int Connection::decreasePostCount()
 {
-    return --m_countPost;
+    int ret = --m_countPost;
+    return ret;
 }
 
 #endif
+
 

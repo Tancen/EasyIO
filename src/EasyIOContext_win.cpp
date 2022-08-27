@@ -4,10 +4,9 @@
 
 using namespace EasyIO;
 
-Context::Context(bool completely)
-    :   m_ref(0),
-        m_progress(0),
-        m_completely(completely)
+Context::Context(Flag flag)
+    :   m_flag(flag),
+        m_ref(0)
 {
     this->hEvent = 0;
     this->Internal = 0;
@@ -21,13 +20,21 @@ Context::Context(bool completely)
     increase();
 }
 
-Context::Context(EasyIO::AutoBuffer buffer, bool completely)
-    :   Context(completely)
+Context::Context(EasyIO::ByteBuffer buffer, Flag flag)
+    :   Context(flag)
 {
     m_buffer = buffer;
-    m_progress = m_buffer.size();
-    m_wsaBuffer.buf = m_buffer.data() + m_buffer.size();
-    m_wsaBuffer.len = m_buffer.capacity() - m_buffer.size();
+
+    if (m_flag == OUTBOUND)
+    {
+        m_wsaBuffer.buf = m_buffer.data();
+        m_wsaBuffer.len = m_buffer.readableBytes();
+    }
+    else
+    {
+        m_wsaBuffer.buf = m_buffer.head() + m_buffer.writerIndex();
+        m_wsaBuffer.len = m_buffer.capacity() - m_buffer.writerIndex();
+    }
 }
 
 void Context::increase()
@@ -43,12 +50,19 @@ void Context::decrease()
 
 void Context::increaseProgress(size_t increase)
 {
-    m_progress += increase;
-    m_wsaBuffer.buf = m_buffer.data() + m_progress;
-    m_wsaBuffer.len = m_buffer.capacity() - m_progress;
+    if (m_flag == OUTBOUND)
+    {
+        m_buffer.moveReaderIndex(increase);
 
-    assert(m_progress <= m_buffer.capacity());
-    m_buffer.resize(m_progress);
+        m_wsaBuffer.buf = m_buffer.data();
+        m_wsaBuffer.len = m_buffer.readableBytes();
+    }
+    else
+    {
+        m_buffer.moveWriterIndex(increase);
+        m_wsaBuffer.buf = m_buffer.head() + m_buffer.writerIndex();
+        m_wsaBuffer.len = m_buffer.capacity() - m_buffer.writerIndex();
+    }
 
     if (onDone)
         onDone(this, increase);
@@ -60,12 +74,7 @@ void Context::error(int err)
         onError(this, err);
 }
 
-size_t Context::progress()
-{
-    return m_progress;
-}
-
-EasyIO::AutoBuffer Context::buffer()
+EasyIO::ByteBuffer Context::buffer()
 {
     return m_buffer;
 }
@@ -77,12 +86,10 @@ WSABUF *Context::WSABuf()
 
 bool Context::finished()
 {
-    return m_progress == m_buffer.capacity();
-}
-
-bool Context::completely()
-{
-    return m_completely;
+    if (m_flag == OUTBOUND)
+        return m_buffer.readableBytes() == 0;
+    else
+        return true;
 }
 
 Context::~Context()

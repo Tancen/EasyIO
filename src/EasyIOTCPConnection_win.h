@@ -4,7 +4,7 @@
 
 #include <string>
 #include <functional>
-#include "EasyIOAutoBuffer.h"
+#include "EasyIOByteBuffer.h"
 #include "EasyIOContext_win.h"
 #include <set>
 #include <mutex>
@@ -28,9 +28,12 @@ namespace EasyIO
 
             bool connected();
 
-            bool disconnect();
-            bool send(AutoBuffer buffer, bool completely, int *numPending);
-            bool recv(AutoBuffer buffer, bool completely, int *numPending);
+            void disconnect();
+            bool disconnecting();
+
+            void send(ByteBuffer buffer);
+            void recv(ByteBuffer buffer);
+            size_t numBytesPending();
 
             bool enableKeepalive(unsigned long interval = 1000, unsigned long time = 2000);
             bool disableKeepalive();
@@ -52,16 +55,18 @@ namespace EasyIO
             void* userdata() const ;
 
         protected:
-            bool post(Context *context, bool isSend);
-            bool post(AutoBuffer buffer, bool isSend, bool completely,
-                    std::function<void(Context*, size_t)> doneCallback,
-                    std::function<void(Context*, int)> errorCallback);
+            int send0();
+            int recv0();
+            void disconnect0(bool requireDecrease, bool requireUnlock, const std::string& reason);
 
-            void whenDone(Context *context, size_t increase, bool isSend,
-                std::function<void (Connection*, AutoBuffer data)> callback);
-            void whenSendDone(Context *context, size_t increase);
-            void whenRecvDone(Context *context, size_t increase);
-            void whenError(Context *context, int err);
+            bool addTask(Context *ctx, std::list<Context*>& dst);
+            int doFirstTask(std::list<Context*>& tasks, std::function<int(Context*)> transmitter);
+            void popFirstTask(std::list<Context*>& tasks);
+            void cleanTasks(std::list<Context*>& tasks);
+
+            void whenSendDone(Context *ctx, size_t increase);
+            void whenRecvDone(Context *ctx, size_t increase);
+            void whenError(Context *ctx, int err);
 
             int increasePostCount();
             int decreasePostCount();
@@ -70,7 +75,8 @@ namespace EasyIO
             SOCKET m_handle;
 
             bool m_connected;
-            std::atomic<bool> m_disconnecting;
+            bool m_disconnecting;
+            std::atomic<size_t> m_numBytesPending;
 
             std::string m_localIP;
             unsigned short m_localPort;
@@ -82,6 +88,8 @@ namespace EasyIO
             void* m_userdata;
 
             std::atomic<int> m_countPost;
+            std::list<Context*> m_tasksSend;
+            std::list<Context*> m_tasksRecv;
         };
     }
 

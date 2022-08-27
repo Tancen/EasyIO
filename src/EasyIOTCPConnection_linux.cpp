@@ -1,6 +1,7 @@
 ﻿#ifdef __linux__
-#include <sys/socket.h>
 #include "EasyIOTCPConnection_linux.h"
+#include "EasyIOError.h"
+#include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -23,12 +24,11 @@ Connection::Connection(EventLoop *worker, SOCKET sock, bool connected)
       m_handle(sock),
       m_context(std::bind(&Connection::handleEvents, this, _1)),
       m_connected(connected),
+      m_disconnecting(false),
       m_localPort(0),
       m_peerPort(0),
       m_userdata(NULL),
-      m_disconnecting(false),
-      m_numPending(0),
-      m_countCallback(0)
+      m_numBytesPending(0)
 {
     if (m_handle != INVALID_SOCKET)
     {
@@ -39,11 +39,15 @@ Connection::Connection(EventLoop *worker, SOCKET sock, bool connected)
 Connection::~Connection()
 {
     disconnect();
+    do
     {
-        std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
-        while (m_connected || m_disconnecting || m_countCallback)
-            std::this_thread::sleep_for(std::chrono::microseconds(1));
-    }
+        {
+            std::lock_guard g(m_lock);
+            if (!m_connected && !m_disconnecting)
+                break;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(1));
+    } while (true);
 }
 
 IConnectionPtr Connection::share()
@@ -61,120 +65,202 @@ bool Connection::connected()
     return m_connected;
 }
 
-bool Connection::disconnect()
+void Connection::disconnect()
 {
-    if (!m_connected || m_disconnecting)
-        return false;
-
-    std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
-    if (!m_connected || m_disconnecting)
-        return false;
-
-    m_disconnecting = true;
-    shutdown(m_handle, SHUT_RDWR);
-
-    return true;
+    disconnect(Error::STR_FORCED_CLOSURE);
 }
 
-bool Connection::send(AutoBuffer buffer, bool completely, int *numPending)
+
+void Connection::disconnect(const std::string &reason)
 {
-    if (!buffer.capacity() || buffer.capacity() == buffer.size())
-        return false;
+    std::lock_guard  g(m_lock);
+    if (m_disconnecting || !m_connected)
+        return;
+    m_disconnecting = true;
+    m_context.events |= EPOLLIN;
+    m_worker->modify(m_handle, &m_context);
+    shutdown(m_handle, SHUT_RDWR);
+    m_reason = reason;
+}
 
-    if (!m_connected)
-        return false;
 
-    bool ret = true;
-    bool isEmpty;
+void Connection::disconnect0(bool requireUnlock)
+{
+    IConnectionPtr holder;
+    if (!this->weak_from_this().expired())
+        holder = this->shared_from_this();;
+
+    bool unlocked = false;
+    do
     {
-        std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
-
-        if (!m_connected)
-            return false;
-
-        isEmpty = m_tasksSend.empty();
-        m_tasksSend.push_back(TaskPtr(new Task(buffer, completely)));
-        m_numPending++;
-    }
-
-    if (isEmpty)
-    {
-        do
         {
-            int err;
-            if (!_send(err))
-            {
-                if (err == 0)
-                {
-                    disconnect();
-                    ret = false;
-                }
-                else if (err < 0)
-                {
-                    if (errno == EAGAIN)
-                    {
-                        m_lock.lock();
-                        if (!m_connected)
-                        {
-                            ret = false;
-                            m_lock.unlock();
-                            break;
-                        }
+            std::lock_guard  g(m_lock);
+            if (!m_connected)
+                break;
 
-                        m_context.events |= EPOLLOUT;
-                        m_worker->modify(m_handle, &m_context);
-                        m_lock.unlock();
-                    }
-                    else
-                    {
-                        setLastSystemError(errno);
-                        disconnect();
-                        ret = false;
-                    }
+            m_worker->remove(m_handle, &m_context);
+            closesocket(m_handle);
+            m_handle = INVALID_SOCKET;
+            m_connected = false;
+            m_numBytesPending = 0;
+            cleanTasks(m_tasksSend);
+            cleanTasks(m_tasksRecv);
+        }
+        if (requireUnlock)
+        {
+            m_lock.unlock();
+            unlocked = true;
+        }
+
+        if (onDisconnected)
+            onDisconnected(this, m_reason);
+
+        {
+            std::lock_guard  g(m_lock);
+            m_disconnecting = false;
+        }
+    } while(0);
+
+    if (requireUnlock && !unlocked)
+        m_lock.unlock();
+}
+
+void Connection::send(ByteBuffer buffer)
+{
+    if (!buffer.readableBytes())
+        return;
+
+    int err = 0;
+    {
+        std::lock_guard g(m_lock);
+        if (!m_connected)
+            return;
+
+        m_numBytesPending += buffer.readableBytes();
+        bool isEmpty = addTask(buffer, m_tasksSend);
+        if (isEmpty)
+        {
+            err = send0();
+            if (!err)
+            {
+                if (m_tasksSend.empty() && (m_context.events & EPOLLOUT))
+                {
+                    m_context.events &= ~EPOLLOUT;
+                    m_worker->modify(m_handle, &m_context);
                 }
             }
-
-            dispatchCallbacks();
         }
-        while (0);
     }
+    if (err)
+        disconnect(Error::formatError(err));
+}
 
+int Connection::send0()
+{
+    int ret = doFirstTask(m_tasksSend,
+            [this](ByteBuffer buf)
+            {
+                do
+                {
+                    if (!buf.readableBytes())
+                        break;
 
-    if (ret && numPending)
-        *numPending = m_numPending;
+                    int err = ::send(m_handle, buf.data(), buf.readableBytes(), 0);
+                    if (err == 0)
+                    {
+                        return Error::getSocketError(m_handle);
+                    }
+                    if (err < 0)
+                    {
+                        if (errno == EAGAIN)
+                        {
+                            if (!(m_context.events & EPOLLOUT))
+                            {
+                                m_context.events |= EPOLLOUT;
+                                m_worker->modify(m_handle, &m_context);
+                            }
+                            return 0;
+                        }
+                        return errno;
+                    }
+
+                    buf.moveReaderIndex(err);
+                    m_numBytesPending -= err;
+                } while (true);
+                return 0;
+            },
+            std::bind(&EasyIO::TCP::Connection::sendComplete, this, std::placeholders::_1),
+            nullptr
+            );
 
     return ret;
 }
 
-bool Connection::recv(AutoBuffer buffer, bool completely, int *numPending)
+bool Connection::sendComplete(ByteBuffer buffer)
 {
-    if (!buffer.capacity() || buffer.capacity() == buffer.size())
-        return false;
+    return !buffer.readableBytes();
+}
 
-    if (!m_connected || m_taskReceive.get())
-        return false;
+void Connection::recv(ByteBuffer buffer)
+{
+    buffer.ensureWritable(4096);
 
+    int err = 0;
     {
-        std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
+        std::lock_guard g(m_lock);
+        if (!m_connected)
+            return;
 
-        if (!m_connected || m_taskReceive.get())
-            return false;
-
-        m_numPending++;
-        m_taskReceive.reset(new Task(buffer, completely));
-
-        if (!(m_context.events & EPOLLIN))
+        bool isEmpty = addTask(buffer, m_tasksRecv);
+        if (isEmpty)
         {
             m_context.events |= EPOLLIN;
             m_worker->modify(m_handle, &m_context);
+            err = recv0();
         }
     }
-
-    if (numPending)
-        *numPending = m_numPending;
-
-    return true;
+    if (err)
+    {
+        disconnect(Error::formatError(err));
+    }
 }
+
+size_t Connection::numBytesPending()
+{
+    return m_numBytesPending;
+}
+
+int Connection::recv0()
+{
+    int ret = doFirstTask(m_tasksRecv,
+            [this](ByteBuffer buf)
+            {
+                int err = ::recv(m_handle, buf.head() + buf.writerIndex(), buf.capacity() - buf.writerIndex(), 0);
+                if (err == 0)
+                {
+                    return Error::getSocketError(m_handle);
+                }
+                if (err < 0)
+                {
+                    if (errno == EAGAIN)
+                        return 0;
+                    return errno;
+                }
+
+                buf.moveWriterIndex(err);
+                return 0;
+            },
+            std::bind(&EasyIO::TCP::Connection::recvComplete, this, std::placeholders::_1),
+            onBufferReceived
+            );
+    return ret;
+}
+
+bool Connection::recvComplete(ByteBuffer buffer)
+{
+    return buffer.readableBytes() != 0;
+}
+
 
 bool Connection::enableKeepalive(unsigned long nInterval, unsigned long nTime)
 {
@@ -186,7 +272,6 @@ bool Connection::enableKeepalive(unsigned long nInterval, unsigned long nTime)
         || setsockopt(m_handle, SOL_TCP, TCP_KEEPIDLE, (void*)&keepalivetime, sizeof(keepalivetime))
         || setsockopt(m_handle, SOL_TCP, TCP_KEEPINTVL, (void*)&keepaliveinterval, sizeof(keepaliveinterval)))
     {
-        setLastSystemError(errno);
         return false;
     }
 
@@ -198,30 +283,18 @@ bool Connection::disableKeepalive()
     int onoff = 0;
 
     int ret = setsockopt(m_handle, SOL_SOCKET, SO_KEEPALIVE, (void*)&onoff, sizeof(onoff));
-    if (ret)
-    {
-        setLastSystemError(errno);
-    }
     return !ret;
 }
 
 bool Connection::setSendBufferSize(unsigned long nSize)
 {
     int ret = setsockopt(m_handle, SOL_SOCKET, SO_SNDBUF, (char*)&nSize, sizeof(unsigned long));
-    if (ret)
-    {
-        setLastSystemError(errno);
-    }
     return !ret;
 }
 
 bool Connection::setReceiveBufferSize(unsigned long nSize)
 {
     int ret = setsockopt(m_handle, SOL_SOCKET, SO_RCVBUF, (char*)&nSize, sizeof(unsigned long));
-    if (ret)
-    {
-        setLastSystemError(errno);
-    }
     return !ret;
 }
 
@@ -229,10 +302,6 @@ bool Connection::setLinger(unsigned short onoff, unsigned short linger)
 {
     struct linger opt = {onoff, linger};
     int ret = setsockopt(m_handle, SOL_SOCKET, SO_LINGER, (char*)&opt, sizeof(opt));
-    if (ret)
-    {
-        setLastSystemError(errno);
-    }
     return !ret;
 }
 
@@ -263,7 +332,6 @@ bool Connection::updateEndPoint()
 
     if(getpeername(m_handle, (sockaddr*)&addrPeer, &len) == -1)
     {
-        setLastSystemError(errno);
         return false;
     }
 
@@ -272,7 +340,6 @@ bool Connection::updateEndPoint()
 
     if(getsockname(m_handle, (sockaddr*)&addrLocal, &len) == -1)
     {
-        setLastSystemError(errno);
         return false;
     }
 
@@ -292,259 +359,107 @@ void *Connection::userdata() const
     return m_userdata;
 }
 
-void Connection::handleEvents(uint32_t events)
+bool Connection::addTask(ByteBuffer buffer, std::list<ByteBuffer> &dst)
+{
+    bool ret = dst.empty();
+    dst.push_back(buffer);
+    return ret;
+}
+
+int Connection::doFirstTask(std::list<ByteBuffer> &tasks, std::function<int (ByteBuffer)> transmitter,
+                            std::function<bool(ByteBuffer)> isComplete, std::function<void (IConnection*, ByteBuffer)> onComplete)
 {
     int ret;
-    size_t offset, size;
+    ByteBuffer buf;
+    {
+        std::lock_guard g(m_lock);
 
-    assert( m_connected);
-    bool bad = false;
+        if (tasks.empty())
+            return 0;
+
+        buf = tasks.front();
+        ret = transmitter(buf);
+    }
+    if (isComplete(buf))
+    {
+        if (onComplete)
+            onComplete(this, buf);
+        popFirstTask(tasks);
+    }
+    return ret;
+}
+
+void Connection::popFirstTask(std::list<ByteBuffer> &tasks)
+{
+    std::lock_guard g(m_lock);
+    if (tasks.empty())
+        return;
+    tasks.pop_front();
+}
+
+void Connection::cleanTasks(std::list<ByteBuffer> &tasks)
+{
+    std::lock_guard g(m_lock);
+
+    while (!tasks.empty())
+        popFirstTask(tasks);
+}
+
+void Connection::handleEvents(uint32_t events)
+{
+    int err = 0;
     do
     {
         if (events & EPOLLIN)
         {
-            std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
-            if (m_taskReceive.get())
-            {
-                offset = m_taskReceive->progress();
-                size = m_taskReceive->data().capacity() - offset;
-                ret = ::recv(m_handle,
-                    m_taskReceive->data().data() + offset, size, 0);
-                if (ret <= 0)
-                {
-                    setLastSystemError(errno);
-                    bad = true;
-                    break;
-                }
-                m_taskReceive->increase(ret);
+            err = recv0();
+            if (err)
+                break;
 
-                if (!m_taskReceive->completely() || m_taskReceive->finished())
-                {
-                    pushCallback(new BufferReceiveCallback(this, m_taskReceive->data()));
-                    m_taskReceive.reset();
-                    m_numPending--;
-                }
+            std::lock_guard g(m_lock);
+            if (m_tasksRecv.empty())
+            {
+                m_context.events &= ~EPOLLIN;
+                m_worker->modify(m_handle, &m_context);
             }
         }
 
         if (events & EPOLLERR)
         {
-            int err = 0;
-            socklen_t l = sizeof(err);
-            if(getsockopt(m_handle, SOL_SOCKET, SO_ERROR, &err, &l) == 0)
-            {
-                setLastSystemError(err);
-            }
-            bad = true;
+            std::lock_guard g(m_lock);
+            err = Error::getSocketError(m_handle);
             break;
         }
 
         if (events & EPOLLOUT)
         {
-            int err;
-            if (!_send(err))
+            err = send0();
+            if (err)
+                break;
+
+            std::lock_guard g(m_lock);
+            if (m_tasksSend.empty())
             {
-                if (err == 0 || (err < 0 && errno != EAGAIN))
-                {
-                    setLastSystemError(errno);
-                    bad = true;
-                    break;
-                }
-            }
-        }
-
-        dispatchCallbacks();
-
-        {
-            std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
-            if (m_connected)
-            {
-                uint32_t events = m_context.events;
-                if (m_tasksSend.empty())
-                    events &= ~EPOLLOUT;
-
-                if (!m_taskReceive.get())
-                    events &= ~EPOLLIN;
-
-                if (m_context.events != events)
-                {
-                    m_context.events = events;
-                    m_worker->modify(m_handle, &m_context);
-                }
+                m_context.events &= ~EPOLLOUT;
+                m_worker->modify(m_handle, &m_context);
             }
         }
     } while (0);
 
-    if (bad)
-        close();
-}
 
-void Connection::close()
-{
+    m_lock.lock();
+    if (m_disconnecting)
     {
-        std::lock_guard<std::recursive_mutex> lockGuard(m_lock);
-
-        m_worker->remove(m_handle, &m_context);
-        closesocket(m_handle);
-        m_handle = INVALID_SOCKET;
-        m_connected = false;
-        m_disconnecting = false;
-        m_tasksSend.clear();
-        m_taskReceive.reset();
-        m_numPending = 0;
-        pushCallback(new DisconnectedCallback(this));
+        m_reason = Error::STR_FORCED_CLOSURE;
+        disconnect0(true);
     }
-
-    dispatchCallbacks();
-}
-
-bool Connection::_send(int& err)
-{
-    bool ret = true;
-    err = 0;
-    do
+    else if (err)
     {
-        TaskPtr task;
-        std::lock_guard<std::recursive_mutex> guard(m_lock);
-        if (!m_tasksSend.empty())
-            task = m_tasksSend.front();
-        if (!task)
-            break;
-
-        size_t offset = task->progress();
-        size_t size = task->data().capacity() - offset;
-        err = ::send(m_handle, task->data().data() + offset, size, 0);
-        if (err <= 0)
-        {
-            ret = false;
-            break;
-        }
-
-        task->increase(err);
-
-        if (!task->completely() || task->finished())
-        {
-            m_tasksSend.pop_front();
-            m_numPending--;
-            pushCallback(new BufferSentCallback(this, task->data()));
-        }
-
-
-    } while (1);
-
-    return ret;
-}
-
-void Connection::pushCallback(ICallback *callback)
-{
-    std::lock_guard<std::recursive_mutex> guard(m_lock);
-    m_callbackList.push_back(callback);
-    m_countCallback++;
-}
-
-void Connection::dispatchCallbacks()
-{
-    do
-    {
-        ICallback* cb = nullptr;
-        m_lock.lock();
-        if (!m_callbackList.empty())
-        {
-            cb = m_callbackList.front();
-            m_callbackList.pop_front();
-        }
+        m_reason = Error::formatError(err);
+        disconnect0(true);
+    }
+    else
         m_lock.unlock();
-
-        if (!cb)
-            break;
-        m_countCallback--;
-
-        cb->callback();
-        delete cb;
-    } while (1);
-}
-
-Connection::Task::Task(AutoBuffer data, bool completely)
-    : m_data(data),
-      m_progress(data.size()),
-      m_completely(completely)
-{
-
-}
-
-Connection::Task::~Task()
-{
-
-}
-
-EasyIO::AutoBuffer Connection::Task::data()
-{
-    return m_data;
-}
-
-void Connection::Task::increase(size_t progress)
-{
-    assert(progress);
-    m_progress += progress;
-
-    assert(m_progress <= m_data.capacity());
-    m_data.resize(m_progress);
-}
-
-size_t Connection::Task::progress()
-{
-    return m_progress;
-}
-
-bool Connection::Task::finished()
-{
-    return m_progress == m_data.capacity();
-}
-
-bool Connection::Task::completely()
-{
-    return m_completely;
-}
-
-DisconnectedCallback::DisconnectedCallback(Connection *con)
-    :   m_con(con)
-{
-    assert(con);
-}
-
-void DisconnectedCallback::callback()
-{
-    if (m_con->onDisconnected)
-        m_con->onDisconnected(m_con);
-}
-
-BufferSentCallback::BufferSentCallback(Connection *con, AutoBuffer data)
-    :   m_con(con), m_data(data)
-{
-    assert(con);
-}
-
-void BufferSentCallback::callback()
-{
-    if (m_con->onBufferSent)
-        m_con->onBufferSent(m_con, m_data);
-}
-
-BufferReceiveCallback::BufferReceiveCallback(Connection *con, AutoBuffer data)
-    :   m_con(con), m_data(data)
-{
-    assert(con);
-}
-
-void BufferReceiveCallback::callback()
-{
-    if (m_con->onBufferReceived)
-        m_con->onBufferReceived(m_con, m_data);
-}
-
-ICallback::~ICallback()
-{
-
 }
 
 #endif

@@ -1,7 +1,7 @@
 #ifndef EASYIOUDPISOCKET_H
 #define EASYIOUDPISOCKET_H
 
-#include "EasyIOAutoBuffer.h"
+#include "EasyIOByteBuffer.h"
 #include "EasyIODef.h"
 #include <functional>
 
@@ -20,21 +20,22 @@ namespace EasyIO
 
             virtual ISocketPtr share() = 0;
             virtual SOCKET handle() = 0;
-            virtual bool send(const std::string& ip, unsigned short port, AutoBuffer buffer) = 0;
-            virtual bool recv(AutoBuffer buffer) = 0;
+            virtual void send(const std::string& ip, unsigned short port, ByteBuffer buffer) = 0;
+            virtual void recv(ByteBuffer buffer) = 0;
             virtual void close() = 0;
+            virtual bool opened() = 0;
 
-            int lastSystemError(){ return m_lastSystemError; }
+            virtual const std::string& localIP() const = 0;
+            virtual unsigned short localPort() const = 0;
 
-        protected:
-            void setLastSystemError(int err) { m_lastSystemError = err; }
+            virtual bool updateEndPoint() = 0;
+
+            virtual void bindUserdata(void* userdata) = 0;
+            virtual void* userdata() const = 0;
 
         public:
             std::function<void (ISocket*, const std::string& peerIP, unsigned short peerPort,
-                                AutoBuffer data)> onBufferReceived;
-
-        protected:
-            int m_lastSystemError = 0;
+                                ByteBuffer data)> onBufferReceived;
         };
     }
 }

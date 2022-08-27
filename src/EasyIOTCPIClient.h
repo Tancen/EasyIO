@@ -18,11 +18,11 @@ namespace EasyIO
             IClient(){}
             virtual ~IClient(){}
 
-            virtual bool connect(const std::string& host, unsigned short port) = 0;
+            virtual void connect(const std::string& host, unsigned short port) = 0;
 
         public:
             std::function<void (IConnection*)> onConnected;
-            std::function<void (IConnection*)> onConnectFailed;
+            std::function<void (IConnection*, const std::string& reason)> onConnectFailed;
         };
     }
 }

@@ -2,6 +2,7 @@
 #include "EasyIOTCPClient_win.h"
 #include "EasyIOEventLoop_win.h"
 #include "EasyIOContext_win.h"
+#include "EasyIOError.h"
 #include <mstcpip.h>
 #include <mswsock.h>
 #include <WinBase.h>
@@ -38,24 +39,29 @@ IClientPtr Client::create(IEventLoopPtr worker)
 Client::~Client()
 {
     disconnect();
-    while(m_connected || m_countPost || m_detained || m_connecting)
+
+    do
+    {
+        {
+            std::lock_guard  g(m_lock);
+            if (!m_connected && !m_detained && !m_connecting && !m_countPost)
+                break;
+        }
         std::this_thread::sleep_for(std::chrono::microseconds(1));
+    } while (true);
 }
 
-bool Client::connect(const std::string& host, unsigned short port)
+void Client::connect(const std::string& host, unsigned short port)
 {
     std::lock_guard<std::recursive_mutex> guard(m_lock);
     if (m_connected || m_connecting)
-        return false;
-
-    setLastSystemError(0);
+        return;
 
     do
     {
         m_handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (m_handle == INVALID_SOCKET)
         {
-            setLastSystemError(GetLastError());
             break;
         }
 
@@ -65,14 +71,12 @@ bool Client::connect(const std::string& host, unsigned short port)
         addr.sin_port = 0;
         if (bind(m_handle, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR)
         {
-            setLastSystemError(GetLastError());
             break;
         }
 
         int err = 0;
         if (!((EventLoop*)m_worker.get())->attach(m_handle, err))
         {
-            setLastSystemError(err);
             break;
         }
 
@@ -85,28 +89,40 @@ bool Client::connect(const std::string& host, unsigned short port)
                 &guid, sizeof(guid), &m_connectEx,
                 sizeof(m_connectEx), &numBytes, NULL, NULL) == SOCKET_ERROR)
             {
-                setLastSystemError(GetLastError());
                 break;
             }
         }
 
-        Context *context = new Context(true);
-        context->onDone = [this](Context*, size_t)
+        Context *ctx = new Context(Context::INBOUND);
+        ctx->onDone = [this](Context* ctx, size_t)
         {
-            m_connected = true;
-            decreasePostCount();
-            m_connecting = false;
+            {
+                std::lock_guard g(m_lock);
+                m_connected = true;
+                m_connecting = false;
 
-            setsockopt(m_handle, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, NULL, 0);
-            updateEndPoint();
-
+                setsockopt(m_handle, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, NULL, 0);
+                updateEndPoint();
+            }
             if (onConnected)
                 this->onConnected(this);
+
+            m_lock.lock();
+            if (m_disconnecting)
+            {
+                disconnect0(true, true, Error::STR_FORCED_CLOSURE);
+            }
+            else
+            {
+                decreasePostCount();
+                m_lock.unlock();
+            }
+
+            ctx->decrease();
         };
 
-        context->onError = [this](Context* , int err)
+        ctx->onError = [this](Context* ctx, int err)
         { 
-            setLastSystemError(err);
             closesocket(m_handle);
             m_handle = INVALID_SOCKET;
             ++m_detained;
@@ -114,8 +130,9 @@ bool Client::connect(const std::string& host, unsigned short port)
             m_connecting = false;
 
             if (onConnectFailed)
-                this->onConnectFailed(this);
+                this->onConnectFailed(this, Error::formatError(err));
             --m_detained;
+            ctx->decrease();
         };
 
         {
@@ -126,36 +143,39 @@ bool Client::connect(const std::string& host, unsigned short port)
 
             increasePostCount();
             m_connecting = true;
-            if(!((LPFN_CONNECTEX)m_connectEx)(m_handle, (sockaddr*)&addr, sizeof(addr), NULL, 0, NULL, context))
+            if(!((LPFN_CONNECTEX)m_connectEx)(m_handle, (sockaddr*)&addr, sizeof(addr), NULL, 0, NULL, ctx))
             {
                 int err = GetLastError();
                 if (err != ERROR_IO_PENDING)
                 {
-                    setLastSystemError(err);
                     decreasePostCount();
                     break;
                 }
             }
         }
 
-        return true;
+        return;
     }
     while (0);
 
     closesocket(m_handle);
     m_handle = INVALID_SOCKET;
-    m_connecting = false;
-    return false;
-}
-
-bool Client::disconnect()
-{
     ++m_detained;
-    bool ret = Connection::disconnect();
+    m_connecting = false;
+    if (onConnectFailed)
+        this->onConnectFailed(this, Error::formatError(WSAGetLastError()));
     --m_detained;
-
-    return ret;
 }
+
+void Client::disconnect()
+{
+    std::lock_guard g(m_lock);
+    if (m_connected)
+        Connection::disconnect();
+    else
+        closesocket(m_handle);
+}
+
 #endif
 
 

@@ -22,9 +22,8 @@ signals:
 
 private:
     void whenConnected(EasyIO::TCP::IConnection *con);
-    void whenDisconnected(EasyIO::TCP::IConnection *con);
-    void whenBufferSent(EasyIO::TCP::IConnection*, EasyIO::AutoBuffer data);
-    void whenBufferReceived(EasyIO::TCP::IConnection*, EasyIO::AutoBuffer data);
+    void whenDisconnected(EasyIO::TCP::IConnection *con, const std::string& reason);
+    void whenBufferReceived(EasyIO::TCP::IConnection*, EasyIO::ByteBuffer data);
 
 private slots:
     void open();
