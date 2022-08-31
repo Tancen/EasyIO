@@ -114,7 +114,7 @@ void ByteBuffer::write(ByteBuffer data, bool discardReadBytes)
     if (!l)
         return;
 
-    write(data, l);
+    write(data.data(), l);
     if (discardReadBytes)
         data.discardReadBytes(l);
 }
