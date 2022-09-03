@@ -96,7 +96,6 @@ void Client::connect(const std::string& host, unsigned short port)
                 if (!(events & EPOLLOUT))
                     break;
 
-                auto onConnected = this->onConnected;
                 {
                     std::lock_guard g(m_lock);
                     if (m_canceling)
@@ -110,11 +109,13 @@ void Client::connect(const std::string& host, unsigned short port)
                     m_connecting = false;
                     updateEndPoint();
 
-                    m_context.setCallback(std::bind(&Client::handleEvents, this, _1));
+
                 }
 
-                if (onConnected)
-                    onConnected(this);
+                if (this->onConnected)
+                    this->onConnected(this);
+
+                m_context.setCallback(std::bind(&Client::handleEvents, this, _1));
 
                 return;
             } while (false);
