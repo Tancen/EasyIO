@@ -371,11 +371,13 @@ void Connection::cleanTasks(std::list<Context *> &tasks)
 
 void Connection::whenSendDone(Context *ctx, size_t increase)
 {
+    bool broken = false;
     int err = 0;
     do
     {
         if (!increase)
         {
+            broken = true;
             std::lock_guard g(m_lock);
             err = Error::getSocketError(m_handle);
             break;
@@ -385,6 +387,7 @@ void Connection::whenSendDone(Context *ctx, size_t increase)
             popFirstTask(m_tasksSend);
 
         err = send0();
+        broken = err;
     } while (0);
 
     m_lock.lock();
@@ -392,7 +395,7 @@ void Connection::whenSendDone(Context *ctx, size_t increase)
     {
         disconnect0(true, true, Error::STR_FORCED_CLOSURE);
     }
-    else if (err)
+    else if (broken)
     {
         disconnect0(true, true, Error::formatError(err));
     }
@@ -404,11 +407,13 @@ void Connection::whenSendDone(Context *ctx, size_t increase)
 }
 void Connection::whenRecvDone(Context *ctx, size_t increase)
 {
+    bool broken = false;
     int err = 0;
     do
     {
         if (!increase)
         {
+            broken = true;
             std::lock_guard g(m_lock);
             err = Error::getSocketError(m_handle);
             break;
@@ -421,6 +426,7 @@ void Connection::whenRecvDone(Context *ctx, size_t increase)
 
         popFirstTask(m_tasksRecv);
         err = recv0();
+        broken = err;
     } while (0);
 
     m_lock.lock();
@@ -428,7 +434,7 @@ void Connection::whenRecvDone(Context *ctx, size_t increase)
     {
         disconnect0(true, true, Error::STR_FORCED_CLOSURE);
     }
-    else if (err)
+    else if (broken)
     {
         disconnect0(true, true, Error::formatError(err));
     }
