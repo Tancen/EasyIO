@@ -1,6 +1,7 @@
 #include "EasyIOByteBuffer.h"
 #include <stdio.h>
 #include <string.h>
+#include <assert.h>
 
 using namespace EasyIO;
 
@@ -8,6 +9,18 @@ using namespace EasyIO;
 
 ByteBuffer::ByteBuffer()
     : ByteBuffer(MIN_CAPACITY)
+{
+
+}
+
+ByteBuffer::ByteBuffer(const ByteBuffer &o)
+    :   m_data(o.m_data)
+{
+
+}
+
+ByteBuffer::ByteBuffer(ByteBuffer &&o)
+    :   m_data(std::move(o.m_data))
 {
 
 }
@@ -29,14 +42,10 @@ ByteBuffer::~ByteBuffer()
 
 }
 
-char *ByteBuffer::head()
+ByteBuffer &ByteBuffer::operator=(const ByteBuffer &o)
 {
-    return (char*)uhead();
-}
-
-unsigned char *ByteBuffer::uhead()
-{
-    return m_data->data.get();
+    this->m_data = o.m_data;
+    return *this;
 }
 
 char *ByteBuffer::data()
@@ -46,38 +55,50 @@ char *ByteBuffer::data()
 
 unsigned char *ByteBuffer::udata()
 {
+    return m_data->data.get();
+}
+
+char *ByteBuffer::readableBytes()
+{
+    return (char*)uReadableBytes();
+}
+
+unsigned char *ByteBuffer::uReadableBytes()
+{
     return m_data->data.get() + m_data->readerIndex;
 }
 
-size_t ByteBuffer::capacity()
+size_t ByteBuffer::capacity() const
 {
     return m_data->capacity;
 }
 
-size_t ByteBuffer::readerIndex()
+size_t ByteBuffer::readerIndex() const
 {
     return m_data->readerIndex;
 }
 
-size_t ByteBuffer::writerIndex()
+size_t ByteBuffer::writerIndex() const
 {
     return m_data->writerIndex;
 }
 
-size_t ByteBuffer::readableBytes()
+size_t ByteBuffer::numReadableBytes() const
 {
+    assert(m_data->writerIndex >= m_data->readerIndex);
     return m_data->writerIndex - m_data->readerIndex;
 }
 
 size_t ByteBuffer::read(unsigned char *dst, size_t len, bool moveReaderIndex)
 {
-    size_t ret = std::min(len, readableBytes());
+    size_t ret = std::min(len, numReadableBytes());
     if (!ret)
         return 0;
     memcpy(dst, m_data->data.get() + m_data->readerIndex, ret);
     if (moveReaderIndex)
     {
         m_data->readerIndex += ret;
+        assert(m_data->readerIndex <= m_data->writerIndex);
         if (m_data->readerIndex == m_data->writerIndex)
         {
             m_data->readerIndex = 0;
@@ -110,11 +131,11 @@ size_t ByteBuffer::get(unsigned char *dst, size_t len)
 
 void ByteBuffer::write(ByteBuffer data, bool discardReadBytes)
 {
-    size_t l = data.readableBytes();
+    size_t l = data.numReadableBytes();
     if (!l)
         return;
 
-    write(data.data(), l);
+    write(data.readableBytes(), l);
     if (discardReadBytes)
         data.discardReadBytes(l);
 }
@@ -194,7 +215,7 @@ void ByteBuffer::fill(char c, size_t len)
 
 void ByteBuffer::clear()
 {
-    reset();
+    m_data->readerIndex = m_data->writerIndex = 0;
 }
 
 void ByteBuffer::reset(size_t capacity)
@@ -228,12 +249,13 @@ size_t ByteBuffer::discardReadBytes(int len)
 {
     size_t l0;
     if (len < 0)
-        l0 = readableBytes();
+        l0 = numReadableBytes();
     else
         l0 = len;
 
-    size_t l = std::min(l0, readableBytes());
+    size_t l = std::min(l0, numReadableBytes());
     m_data->readerIndex += l;
+    assert(m_data->readerIndex <= m_data->writerIndex);
     if (m_data->readerIndex == m_data->writerIndex)
     {
         m_data->readerIndex = 0;
@@ -258,10 +280,14 @@ void ByteBuffer::moveReaderIndex(int offset)
 void ByteBuffer::moveWriterIndex(int offset)
 {
     long long index = m_data->writerIndex + offset;
-    if (index < (long long)m_data->readerIndex)
+    if (index < 0)
     {
         m_data->readerIndex = 0;
         m_data->writerIndex = 0;
+    }
+    else if (index < (long long)m_data->readerIndex)
+    {
+        m_data->readerIndex = m_data->writerIndex = index;
     }
     else if (index >= m_data->capacity)
         m_data->writerIndex = m_data->capacity;
@@ -275,7 +301,7 @@ void ByteBuffer::ensureWritable(size_t len)
     size_t r = m_data->capacity - m_data->writerIndex;
     if (r < len)
     {
-        size_t l = readableBytes();
+        size_t l = numReadableBytes();
         if (m_data->readerIndex >= len && m_data->readerIndex > (m_data->capacity >> 1))
         {
             memmove(m_data->data.get(), m_data->data.get() + m_data->readerIndex, l);

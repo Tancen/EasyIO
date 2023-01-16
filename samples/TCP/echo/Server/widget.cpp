@@ -72,7 +72,7 @@ void Widget::whenBufferReceived(EasyIO::TCP::IConnection *con, EasyIO::ByteBuffe
     str.append(con->peerIP().c_str())
         .append(":")
         .append(QString::number(con->peerPort()))
-        .append(" 接收:\n").append(QByteArray(data.data(), data.readableBytes()));
+        .append(" 接收:\n").append(QByteArray(data.readableBytes(), data.numReadableBytes()));
 
     con->send(data);
     con->recv(EasyIO::ByteBuffer());

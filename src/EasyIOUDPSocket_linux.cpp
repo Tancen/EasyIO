@@ -124,7 +124,7 @@ void Socket::close0()
 
 void Socket::send(const std::string& ip, unsigned short port, ByteBuffer buffer)
 {
-    if (!buffer.readableBytes())
+    if (!buffer.numReadableBytes())
         return;
 
     int err = 0;
@@ -138,7 +138,7 @@ void Socket::send(const std::string& ip, unsigned short port, ByteBuffer buffer)
         task->addr()->sin_addr.s_addr = inet_addr(ip.c_str());
         task->addr()->sin_port = htons(port);
 
-        m_numBytesPending += buffer.readableBytes();
+        m_numBytesPending += buffer.numReadableBytes();
         bool isEmpty = addTask(task, m_tasksSend);
         if (isEmpty)
         {
@@ -164,10 +164,10 @@ int Socket::send0()
             {
                 do
                 {
-                    if (!task->buffer().readableBytes())
+                    if (!task->buffer().numReadableBytes())
                         break;
 
-                    int err = ::sendto(m_handle, task->buffer().data(), task->buffer().readableBytes(), 0,
+                    int err = ::sendto(m_handle, task->buffer().readableBytes(), task->buffer().numReadableBytes(), 0,
                                        (sockaddr*)(task->addr()), *task->addrLen());
                     if (err == 0)
                     {
@@ -201,7 +201,7 @@ int Socket::send0()
 
 bool Socket::sendComplete(TaskPtr task)
 {
-    return !task->buffer().readableBytes();
+    return !task->buffer().numReadableBytes();
 }
 
 void Socket::recv(ByteBuffer buffer)
@@ -224,12 +224,17 @@ void Socket::recv(ByteBuffer buffer)
     }
 }
 
+size_t Socket::numBytesPending()
+{
+    return m_numBytesPending;
+}
+
 int Socket::recv0()
 {
     int ret = doFirstTask(m_tasksRecv,
             [this](TaskPtr task)
             {
-                int err = ::recvfrom(m_handle, task->buffer().head() + task->buffer().writerIndex(),
+                int err = ::recvfrom(m_handle, task->buffer().data() + task->buffer().writerIndex(),
                                      task->buffer().capacity() - task->buffer().writerIndex(), 0,
                                      (sockaddr*)(task->addr()), task->addrLen());
                 if (err == 0)
@@ -255,7 +260,7 @@ int Socket::recv0()
 
 bool Socket::recvComplete(TaskPtr task)
 {
-    return task->buffer().readableBytes() != 0;
+    return task->buffer().numReadableBytes() != 0;
 }
 
 const std::string& Socket::localIP() const

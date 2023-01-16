@@ -33,7 +33,7 @@ Widget::Widget(QWidget *parent) :
 
 Widget::~Widget()
 {
-    m_client.reset();
+    m_client->syncDisconnect();
     delete ui;
 }
 
@@ -81,7 +81,7 @@ void Widget::whenDisconnected(EasyIO::TCP::IConnection *, const std::string& rea
 void Widget::whenBufferReceived(EasyIO::TCP::IConnection *con, EasyIO::ByteBuffer data)
 {
     m_count.countRead++;
-    m_count.bytesRead += data.readableBytes();
+    m_count.bytesRead += data.numReadableBytes();
 
     con->send(data);
     con->recv(EasyIO::ByteBuffer());

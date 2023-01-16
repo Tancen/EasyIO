@@ -85,7 +85,7 @@ void Widget::whenBufferReceived(EasyIO::TCP::IConnection *con, EasyIO::ByteBuffe
 {
     Count *pCount = (Count *)(con->userdata());
     pCount->countRead++;
-    pCount->bytesRead += data.readableBytes();
+    pCount->bytesRead += data.numReadableBytes();
 
     con->send(data);
     con->recv(EasyIO::ByteBuffer());

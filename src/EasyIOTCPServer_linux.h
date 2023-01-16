@@ -16,13 +16,13 @@ namespace EasyIO
         class Server : public IServer
         {
         public:
-            static IServerPtr create();
+            static IServerPtr create(unsigned numWorkers = 1);
             static IServerPtr create(EventLoopGroupPtr workers);
             ~Server();
 
-            bool open(unsigned short port, unsigned int backlog = 15);
-            void close();
-            bool opened();
+            bool open(unsigned short port, unsigned int backlog = 15) override;
+            void close() override;
+            bool opened() override;
 
         private:
             Server(EventLoopGroupPtr workers);

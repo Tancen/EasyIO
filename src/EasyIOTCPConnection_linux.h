@@ -24,34 +24,36 @@ namespace EasyIO
             Connection(EventLoop *worker, SOCKET sock, bool connected = true);
             ~Connection();
 
-            IConnectionPtr share();
-            SOCKET handle();
+            IConnectionPtr share() override;
+            SOCKET handle() override;
 
-            bool connected();
+            bool connected() override;
 
-            void disconnect();
-            void send(ByteBuffer buffer);
-            void recv(ByteBuffer buffer);
-            size_t numBytesPending();
+            void disconnect() override;
+            void syncDisconnect() override;
 
-            bool enableKeepalive(unsigned long interval = 1000, unsigned long time = 2000);
-            bool disableKeepalive();
+            void send(ByteBuffer buffer) override;
+            void recv(ByteBuffer buffer) override;
+            int numBytesPending() override;
 
-            bool setSendBufferSize(unsigned long size);
-            bool setReceiveBufferSize(unsigned long size);
+            bool enableKeepalive(unsigned long interval = 1000, unsigned long time = 2000) override;
+            bool disableKeepalive() override;
 
-            bool setLinger(unsigned short onoff, unsigned short linger);
+            bool setSendBufferSize(unsigned long size) override;
+            bool setReceiveBufferSize(unsigned long size) override;
 
-            const std::string& localIP() const ;
-            unsigned short localPort() const ;
+            bool setLinger(unsigned short onoff, unsigned short linger) override;
 
-            const std::string& peerIP() const ;
-            unsigned short peerPort() const ;
+            const std::string& localIP() const  override;
+            unsigned short localPort() const  override;
 
-            bool updateEndPoint();
+            const std::string& peerIP() const  override;
+            unsigned short peerPort() const  override;
 
-            void bindUserdata(void* userdata);
-            void* userdata() const ;
+            bool updateEndPoint() override;
+
+            void bindUserdata(void* userdata) override;
+            void* userdata() const  override;
 
         protected:
             int send0();
@@ -70,6 +72,8 @@ namespace EasyIO
             void cleanTasks(std::list<ByteBuffer>& tasks);
 
             void handleEvents(uint32_t events);
+
+            virtual IConnectionPtr makeHolder();
 
         protected:
             SOCKET m_handle;
@@ -92,7 +96,7 @@ namespace EasyIO
 
             void* m_userdata;
 
-            std::atomic<size_t> m_numBytesPending;
+            std::atomic<int> m_numBytesPending;
             std::string m_reason;
         };
     }

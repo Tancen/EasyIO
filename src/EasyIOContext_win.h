@@ -19,6 +19,7 @@ namespace EasyIO
         Context(Flag flag);
         Context(ByteBuffer buffer, Flag flag);
 
+        Flag flag();
         void increase();
         void decrease();
 

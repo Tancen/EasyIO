@@ -25,12 +25,27 @@ namespace EasyIO
             virtual void close() = 0;
             virtual bool opened() = 0;
 
+            /**
+            * @brief   get the number of bytes waiting to send
+            */
+            virtual size_t numBytesPending() = 0;
+
             virtual const std::string& localIP() const = 0;
             virtual unsigned short localPort() const = 0;
 
+            /**
+            * @brief   Upadate localIP, localPort, peerIP, peerPort
+            */
             virtual bool updateEndPoint() = 0;
 
+            /**
+            * @brief   Bind user data on this connection
+            */
             virtual void bindUserdata(void* userdata) = 0;
+
+            /**
+            * @brief   get bound user data
+            */
             virtual void* userdata() const = 0;
 
         public:

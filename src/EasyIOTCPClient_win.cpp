@@ -20,6 +20,12 @@ Client::Client(IEventLoopPtr worker)
 
 }
 
+IConnectionPtr Client::makeHolder()
+{
+    //don't hold this, avoid deadlock in the destructor of worker
+    return IConnectionPtr();
+}
+
 IClientPtr Client::create()
 {
     IEventLoopPtr worker = EventLoop::create();
@@ -38,24 +44,18 @@ IClientPtr Client::create(IEventLoopPtr worker)
 
 Client::~Client()
 {
-    disconnect();
-
-    do
-    {
-        {
-            std::lock_guard  g(m_lock);
-            if (!m_connected && !m_detained && !m_connecting && !m_countPost)
-                break;
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(1));
-    } while (true);
+    Client::syncDisconnect();
 }
 
 void Client::connect(const std::string& host, unsigned short port)
 {
     std::lock_guard<std::recursive_mutex> guard(m_lock);
     if (m_connected || m_connecting)
+    {
+        if (onConnectFailed)
+            this->onConnectFailed(this, "connected or connecting");
         return;
+    }
 
     do
     {
@@ -104,6 +104,7 @@ void Client::connect(const std::string& host, unsigned short port)
                 setsockopt(m_handle, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, NULL, 0);
                 updateEndPoint();
             }
+
             if (onConnected)
                 this->onConnected(this);
 
@@ -176,7 +177,24 @@ void Client::disconnect()
         closesocket(m_handle);
 }
 
+bool EasyIO::TCP::Client::connecting()
+{
+    return m_connecting;
+}
+
+void Client::syncDisconnect()
+{
+    Client::disconnect();
+
+    do
+    {
+        {
+            std::lock_guard  g(m_lock);
+            if (!m_connected && !m_detained && !m_connecting && !m_countPost)
+                break;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(1));
+    } while (true);
+}
+
 #endif
-
-
-

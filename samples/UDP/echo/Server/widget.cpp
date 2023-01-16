@@ -40,7 +40,7 @@ void Widget::whenBufferReceived(EasyIO::UDP::ISocket* socket, const std::string&
     str.append("已接收 [")
         .append(ip).append(":").append(QString::number(port).toStdString()).append("] :");
 
-    str.append(data.data(), data.readableBytes());
+    str.append(data.readableBytes(), data.numReadableBytes());
 
     socket->send(ip, port, data);
     socket->recv(EasyIO::ByteBuffer());

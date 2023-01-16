@@ -19,6 +19,7 @@ namespace EasyIO
             virtual ~IClient(){}
 
             virtual void connect(const std::string& host, unsigned short port) = 0;
+            virtual bool connecting() = 0;
 
         public:
             std::function<void (IConnection*)> onConnected;

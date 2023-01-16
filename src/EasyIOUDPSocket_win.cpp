@@ -128,7 +128,7 @@ void Socket::close0(bool requireDecrease)
 
 void Socket::send(const std::string& ip, unsigned short port, ByteBuffer buffer)
 {
-    if (!buffer.readableBytes())
+    if (!buffer.numReadableBytes())
         return;
 
     {
@@ -143,7 +143,7 @@ void Socket::send(const std::string& ip, unsigned short port, ByteBuffer buffer)
         ctx->onDone = std::bind(&Socket::whenSendDone, this, _1, _2);
         ctx->onError = std::bind(&Socket::whenError, this, _1, _2);
 
-        m_numBytesPending += buffer.readableBytes();
+        m_numBytesPending += buffer.numReadableBytes();
         bool isEmpty = addTask(ctx, m_tasksSend);
         if (isEmpty)
         {

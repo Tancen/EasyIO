@@ -5,6 +5,7 @@
 #include <mswsock.h>
 #include <WinBase.h>
 #include <thread>
+#include <assert.h>
 
 using namespace EasyIO::TCP;
 using namespace std::placeholders;
@@ -30,16 +31,7 @@ Connection::Connection(SOCKET sock, bool connected)
 
 Connection::~Connection()
 {
-    disconnect();
-    do
-    {
-        {
-            std::lock_guard  g(m_lock);
-            if (!m_connected && !m_countPost)
-                break;
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(1));
-    } while (true);
+    Connection::syncDisconnect();
 }
 
 IConnectionPtr Connection::share()
@@ -62,6 +54,20 @@ void Connection::disconnect()
     disconnect0(false, false, Error::STR_FORCED_CLOSURE);
 }
 
+void Connection::syncDisconnect()
+{
+    Connection::disconnect();
+    do
+    {
+        {
+            std::lock_guard  g(m_lock);
+            if (!m_connected && !m_countPost)
+                break;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(1));
+    } while (true);
+}
+
 bool Connection::disconnecting()
 {
     return m_disconnecting;
@@ -69,9 +75,7 @@ bool Connection::disconnecting()
 
 void Connection::disconnect0(bool requireDecrease, bool requireUnlock, const std::string& reason)
 {
-    IConnectionPtr holder;
-    if (!this->weak_from_this().expired())
-        holder = this->shared_from_this();;
+    IConnectionPtr holder = makeHolder();
 
     bool unlocked = false;
     do
@@ -101,10 +105,10 @@ void Connection::disconnect0(bool requireDecrease, bool requireUnlock, const std
             else if (m_countPost)
                 break;
 
-            m_connected = false;
-            m_numBytesPending = 0;
             cleanTasks(m_tasksSend);
             cleanTasks(m_tasksRecv);
+            m_connected = false;
+            m_numBytesPending = 0;
         }
         if (requireUnlock)
         {
@@ -135,7 +139,7 @@ void Connection::disconnect0(bool requireDecrease, bool requireUnlock, const std
 
 void Connection::send(ByteBuffer buffer)
 {
-    if (!buffer.readableBytes())
+    if (!buffer.numReadableBytes())
         return;
 
     int err = 0;
@@ -144,14 +148,16 @@ void Connection::send(ByteBuffer buffer)
         if (!m_connected)
             return;
 
-        Context* ctx = new Context(buffer, Context::OUTBOUND);
+        Context* ctx = new Context(std::move(buffer), Context::OUTBOUND);
         ctx->onDone = std::bind(&Connection::whenSendDone, this, _1, _2);
         ctx->onError = std::bind(&Connection::whenError, this, _1, _2);
 
-        m_numBytesPending += buffer.readableBytes();
+        int v = m_numBytesPending.fetch_add(ctx->buffer().numReadableBytes());
+        assert(v >= 0);
         bool isEmpty = addTask(ctx, m_tasksSend);
         if (isEmpty)
         {
+            assert(v == 0);
             err = send0();
         }
         ctx->decrease();
@@ -164,13 +170,17 @@ int Connection::send0()
 {
     int ret = doFirstTask(m_tasksSend, [this](Context* ctx)
     {
+        ctx->increase();
         DWORD flags = 0;
         int ret = WSASend(m_handle, ctx->WSABuf(), 1,  NULL, flags, ctx, NULL);
         if (ret == SOCKET_ERROR)
         {
             int err = GetLastError();
             if(err != WSA_IO_PENDING)
+            {
+                ctx->decrease();
                 return err;
+            }
         }
         return 0;
     });
@@ -179,15 +189,13 @@ int Connection::send0()
 
 void Connection::recv(ByteBuffer buffer)
 {
-    buffer.ensureWritable(4096);
-
     int err = 0;
     {
         std::lock_guard g(m_lock);
         if (!m_connected)
             return;
 
-        Context* ctx = new Context(buffer, Context::INBOUND);
+        Context* ctx = new Context(std::move(buffer), Context::INBOUND);
         ctx->onDone = std::bind(&Connection::whenRecvDone, this, _1, _2);
         ctx->onError = std::bind(&Connection::whenError, this, _1, _2);
 
@@ -206,22 +214,28 @@ int Connection::recv0()
 {
     int ret = doFirstTask(m_tasksRecv, [this](Context* ctx)
     {
+        ctx->increase();
         DWORD flags = 0;
         int ret = WSARecv(m_handle, ctx->WSABuf(), 1,  NULL, &flags, ctx, NULL);
         if (ret == SOCKET_ERROR)
         {
             int err = GetLastError();
             if(err != WSA_IO_PENDING)
+            {
+                ctx->decrease();
                 return err;
+            }
         }
         return 0;
     });
     return ret;
 }
 
-size_t Connection::numBytesPending()
+int Connection::numBytesPending()
 {
-    return m_numBytesPending;
+    int ret = m_numBytesPending.load();
+    assert (ret >= 0);
+    return ret;
 }
 
 bool Connection::enableKeepalive(unsigned long nInterval, unsigned long nTime)
@@ -333,6 +347,7 @@ bool Connection::addTask(Context *ctx, std::list<Context *> &dst)
     bool ret = dst.empty();
     ctx->increase();
     dst.push_back(ctx);
+
     return ret;
 }
 
@@ -351,14 +366,15 @@ int Connection::doFirstTask(std::list<Context*>& tasks, std::function<int(Contex
     return ret;
 }
 
-void Connection::popFirstTask(std::list<Context*>& tasks)
+int Connection::popFirstTask(std::list<Context*>& tasks)
 {
     std::lock_guard g(m_lock);
-    if (tasks.empty())
-        return;
+    assert(!tasks.empty());
+
     Context* ctx = tasks.front();
     tasks.pop_front();
     ctx->decrease();
+    return tasks.size();
 }
 
 void Connection::cleanTasks(std::list<Context *> &tasks)
@@ -383,10 +399,11 @@ void Connection::whenSendDone(Context *ctx, size_t increase)
             break;
         }
 
-        if (ctx->finished())
-            popFirstTask(m_tasksSend);
+        int v = m_numBytesPending.fetch_sub(increase);
+        assert(v >= 0);
 
-        err = send0();
+        if (!ctx->finished() || popFirstTask(m_tasksSend) > 0)
+            err = send0();
         broken = err;
     } while (0);
 
@@ -404,6 +421,7 @@ void Connection::whenSendDone(Context *ctx, size_t increase)
         decreasePostCount();
         m_lock.unlock();
     }
+    ctx->decrease();
 }
 void Connection::whenRecvDone(Context *ctx, size_t increase)
 {
@@ -424,8 +442,8 @@ void Connection::whenRecvDone(Context *ctx, size_t increase)
             onBufferReceived(this, ctx->buffer());
         }
 
-        popFirstTask(m_tasksRecv);
-        err = recv0();
+        if(!ctx->finished() || popFirstTask(m_tasksRecv) >= 0)
+            err = recv0();
         broken = err;
     } while (0);
 
@@ -443,9 +461,10 @@ void Connection::whenRecvDone(Context *ctx, size_t increase)
         decreasePostCount();
         m_lock.unlock();
     }
+    ctx->decrease();
 }
 
-void Connection::whenError(Context *context, int err)
+void Connection::whenError(Context *ctx, int err)
 {
     std::string reason;
     {
@@ -457,6 +476,7 @@ void Connection::whenError(Context *context, int err)
     }
 
     disconnect0(true, false, reason);
+    ctx->decrease();
 }
 
 int Connection::increasePostCount()
@@ -469,6 +489,14 @@ int Connection::decreasePostCount()
 {
     int ret = --m_countPost;
     return ret;
+}
+
+IConnectionPtr Connection::makeHolder()
+{
+    IConnectionPtr holder;
+    if (!this->weak_from_this().expired())
+        holder = this->shared_from_this();;
+    return holder;
 }
 
 #endif

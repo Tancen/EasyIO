@@ -25,9 +25,14 @@ namespace EasyIO
             virtual bool connected() = 0;
 
             virtual void disconnect() = 0;
+            virtual void syncDisconnect() = 0;
             virtual void send(ByteBuffer buffer) = 0;
             virtual void recv(ByteBuffer buffer) = 0;
-            virtual size_t numBytesPending() = 0;
+
+            /**
+            * @brief   get the number of bytes waiting to send
+            */
+            virtual int numBytesPending() = 0;
 
             virtual bool enableKeepalive(unsigned long interval = 1000, unsigned long time = 2000) = 0;
             virtual bool disableKeepalive() = 0;
@@ -43,9 +48,19 @@ namespace EasyIO
             virtual const std::string& peerIP() const = 0;
             virtual unsigned short peerPort() const = 0;
 
+            /**
+            * @brief   Upadate localIP, localPort, peerIP, peerPort
+            */
             virtual bool updateEndPoint() = 0;
 
+            /**
+            * @brief   Bind user data on this connection
+            */
             virtual void bindUserdata(void* userdata) = 0;
+
+            /**
+            * @brief   get bound user data
+            */
             virtual void* userdata() const = 0;
 
         public:

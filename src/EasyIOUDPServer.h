@@ -23,7 +23,7 @@ namespace EasyIO
 
             ~Server();
 
-            bool open(unsigned short port);
+            bool open(unsigned short port) override;
 
         protected:
             Server(IEventLoopPtr worker);

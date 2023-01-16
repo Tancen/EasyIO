@@ -38,16 +38,7 @@ Connection::Connection(EventLoop *worker, SOCKET sock, bool connected)
 
 Connection::~Connection()
 {
-    disconnect();
-    do
-    {
-        {
-            std::lock_guard g(m_lock);
-            if (!m_connected && !m_disconnecting)
-                break;
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(1));
-    } while (true);
+    Connection::syncDisconnect();
 }
 
 IConnectionPtr Connection::share()
@@ -70,6 +61,19 @@ void Connection::disconnect()
     disconnect(Error::STR_FORCED_CLOSURE);
 }
 
+void Connection::syncDisconnect()
+{
+    Connection::disconnect();
+    do
+    {
+        {
+            std::lock_guard g(m_lock);
+            if (!m_connected && !m_disconnecting)
+                break;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(1));
+    } while (true);
+}
 
 void Connection::disconnect(const std::string &reason)
 {
@@ -86,10 +90,7 @@ void Connection::disconnect(const std::string &reason)
 
 void Connection::disconnect0(bool requireUnlock)
 {
-    IConnectionPtr holder;
-    if (!this->weak_from_this().expired())
-        holder = this->shared_from_this();;
-
+    IConnectionPtr holder = makeHolder();
     bool unlocked = false;
     do
     {
@@ -127,7 +128,7 @@ void Connection::disconnect0(bool requireUnlock)
 
 void Connection::send(ByteBuffer buffer)
 {
-    if (!buffer.readableBytes())
+    if (!buffer.numReadableBytes())
         return;
 
     int err = 0;
@@ -136,10 +137,12 @@ void Connection::send(ByteBuffer buffer)
         if (!m_connected)
             return;
 
-        m_numBytesPending += buffer.readableBytes();
-        bool isEmpty = addTask(buffer, m_tasksSend);
+        int v = m_numBytesPending.fetch_add(buffer.numReadableBytes());
+        assert(v >= 0);
+        bool isEmpty = addTask(std::move(buffer), m_tasksSend);
         if (isEmpty)
         {
+            assert(v == 0);
             err = send0();
             if (!err)
             {
@@ -162,10 +165,10 @@ int Connection::send0()
             {
                 do
                 {
-                    if (!buf.readableBytes())
+                    if (!buf.numReadableBytes())
                         break;
 
-                    int err = ::send(m_handle, buf.data(), buf.readableBytes(), 0);
+                    int err = ::send(m_handle, buf.readableBytes(), buf.numReadableBytes(), 0);
                     if (err == 0)
                     {
                         return Error::getSocketError(m_handle);
@@ -198,7 +201,7 @@ int Connection::send0()
 
 bool Connection::sendComplete(ByteBuffer buffer)
 {
-    return !buffer.readableBytes();
+    return !buffer.numReadableBytes();
 }
 
 void Connection::recv(ByteBuffer buffer)
@@ -211,7 +214,7 @@ void Connection::recv(ByteBuffer buffer)
         if (!m_connected)
             return;
 
-        bool isEmpty = addTask(buffer, m_tasksRecv);
+        bool isEmpty = addTask(std::move(buffer), m_tasksRecv);
         if (isEmpty)
         {
             m_context.events |= EPOLLIN;
@@ -225,9 +228,11 @@ void Connection::recv(ByteBuffer buffer)
     }
 }
 
-size_t Connection::numBytesPending()
+int Connection::numBytesPending()
 {
-    return m_numBytesPending;
+    int ret = m_numBytesPending.load();
+    assert (ret >= 0);
+    return ret;
 }
 
 int Connection::recv0()
@@ -235,7 +240,7 @@ int Connection::recv0()
     int ret = doFirstTask(m_tasksRecv,
             [this](ByteBuffer buf)
             {
-                int err = ::recv(m_handle, buf.head() + buf.writerIndex(), buf.capacity() - buf.writerIndex(), 0);
+                int err = ::recv(m_handle, buf.data() + buf.writerIndex(), buf.capacity() - buf.writerIndex(), 0);
                 if (err == 0)
                 {
                     return Error::getSocketError(m_handle);
@@ -258,7 +263,7 @@ int Connection::recv0()
 
 bool Connection::recvComplete(ByteBuffer buffer)
 {
-    return buffer.readableBytes() != 0;
+    return buffer.numReadableBytes() != 0;
 }
 
 
@@ -462,5 +467,16 @@ void Connection::handleEvents(uint32_t events)
         m_lock.unlock();
 }
 
+IConnectionPtr Connection::makeHolder()
+{
+    IConnectionPtr holder;
+    if (!this->weak_from_this().expired())
+        holder = this->shared_from_this();;
+    return holder;
+}
+
+
 #endif
+
+
 

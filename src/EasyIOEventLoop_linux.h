@@ -24,7 +24,7 @@ namespace EasyIO
         static IEventLoopPtr create(int maxEvents = 1024);
         ~EventLoop();
 
-        IEventLoopPtr share();
+        IEventLoopPtr share() override;
 
         void add(int fd, Context::Context *context);
         void modify(int fd, Context::Context *context);

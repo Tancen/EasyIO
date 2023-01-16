@@ -22,37 +22,38 @@ namespace EasyIO
             Connection(SOCKET sock, bool connected = true);
             ~Connection();
 
-            IConnectionPtr share();
+            IConnectionPtr share() override;
 
-            SOCKET handle();
+            SOCKET handle() override;
 
-            bool connected();
+            bool connected() override;
 
-            void disconnect();
+            void disconnect() override;
+            void syncDisconnect() override;
             bool disconnecting();
 
-            void send(ByteBuffer buffer);
-            void recv(ByteBuffer buffer);
-            size_t numBytesPending();
+            void send(ByteBuffer buffer) override;
+            void recv(ByteBuffer buffer) override;
+            int numBytesPending() override;
 
-            bool enableKeepalive(unsigned long interval = 1000, unsigned long time = 2000);
-            bool disableKeepalive();
+            bool enableKeepalive(unsigned long interval = 1000, unsigned long time = 2000) override;
+            bool disableKeepalive() override;
 
-            bool setSendBufferSize(unsigned long size);
-            bool setReceiveBufferSize(unsigned long size);
+            bool setSendBufferSize(unsigned long size) override;
+            bool setReceiveBufferSize(unsigned long size) override;
 
-            bool setLinger(unsigned short onoff, unsigned short linger);
+            bool setLinger(unsigned short onoff, unsigned short linger) override;
 
-            const std::string& localIP() const ;
-            unsigned short localPort() const ;
+            const std::string& localIP() const  override;
+            unsigned short localPort() const  override;
 
-            const std::string& peerIP() const ;
-            unsigned short peerPort() const ;
+            const std::string& peerIP() const  override;
+            unsigned short peerPort() const  override;
 
-            bool updateEndPoint();
+            bool updateEndPoint() override;
 
-            void bindUserdata(void* userdata);
-            void* userdata() const ;
+            void bindUserdata(void* userdata) override;
+            void* userdata() const  override;
 
         protected:
             int send0();
@@ -61,7 +62,7 @@ namespace EasyIO
 
             bool addTask(Context *ctx, std::list<Context*>& dst);
             int doFirstTask(std::list<Context*>& tasks, std::function<int(Context*)> transmitter);
-            void popFirstTask(std::list<Context*>& tasks);
+            int popFirstTask(std::list<Context*>& tasks);
             void cleanTasks(std::list<Context*>& tasks);
 
             void whenSendDone(Context *ctx, size_t increase);
@@ -71,12 +72,14 @@ namespace EasyIO
             int increasePostCount();
             int decreasePostCount();
 
+            virtual IConnectionPtr makeHolder();
+
         protected:
             SOCKET m_handle;
 
             bool m_connected;
             bool m_disconnecting;
-            std::atomic<size_t> m_numBytesPending;
+            std::atomic<int> m_numBytesPending;
 
             std::string m_localIP;
             unsigned short m_localPort;

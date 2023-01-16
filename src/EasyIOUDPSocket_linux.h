@@ -23,23 +23,23 @@ namespace EasyIO
             Socket(EventLoop *worker, SOCKET sock);
             ~Socket();
 
-            ISocketPtr share();
-            SOCKET handle();
+            ISocketPtr share() override;
+            SOCKET handle() override;
 
-            bool opened();
+            bool opened() override;
 
-            void close();
-            void send(const std::string& ip, unsigned short port, ByteBuffer buffer);
-            void recv(ByteBuffer buffer);
-            size_t numBytesPending();
+            void close() override;
+            void send(const std::string& ip, unsigned short port, ByteBuffer buffer) override;
+            void recv(ByteBuffer buffer) override;
+            size_t numBytesPending() override;
 
-            const std::string& localIP() const ;
-            unsigned short localPort() const ;
+            const std::string& localIP() const  override;
+            unsigned short localPort() const  override;
 
-            bool updateEndPoint();
+            bool updateEndPoint() override;
 
-            void bindUserdata(void* userdata);
-            void* userdata() const ;
+            void bindUserdata(void* userdata) override;
+            void* userdata() const  override;
 
         protected:
             int send0();

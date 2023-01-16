@@ -12,14 +12,16 @@ Server::Server(EventLoopGroupPtr workers)
 
 }
 
-IServerPtr Server::create()
+IServerPtr Server::create(unsigned numWorkers)
 {
-    IEventLoopPtr w = EventLoop::create();
-    if (!w.get())
-        return IServerPtr();
-
     std::vector<IEventLoopPtr> ws;
-    ws.push_back(w);
+    for (unsigned i = 0; i < numWorkers; i++)
+    {
+        IEventLoopPtr w = EventLoop::create();
+        if (!w.get())
+            return IServerPtr();
+        ws.push_back(w);
+    }
 
     return create(EventLoopGroupPtr(new EventLoopGroup(ws)));
 }

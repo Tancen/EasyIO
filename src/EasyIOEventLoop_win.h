@@ -14,7 +14,7 @@ namespace EasyIO
         static IEventLoopPtr create();
         ~EventLoop();
 
-        IEventLoopPtr share();
+        IEventLoopPtr share() override;
 
         bool attach(SOCKET sock, int& err);
         void detach(SOCKET sock);
